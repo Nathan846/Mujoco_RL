@@ -1,6 +1,6 @@
 import gym
 from gym.envs.registration import register
-from mujoco_solar import SolarPanelEnv
+from env_python import UR5Env
 # def register_solar_panel_env():
 #     # Register the environment with gym
 #     register(
@@ -14,11 +14,11 @@ from mujoco_solar import SolarPanelEnv
 
 # After registering, you can create the environment like this:
 # env = gym.make('SolarPanel-v0')
-env = SolarPanelEnv()
-# Now you can interact with the environment
+env = UR5Env()
 obs = env.reset()
 done = False
 while True:
-    action = env.action_space.sample()  # Sample random actions for testing
+    action = env.action_space.sample()
+    #action = [1,0,1,0,0,0]
     obs, reward, done, info = env.step(action)
     env.render()
