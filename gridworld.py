@@ -1,6 +1,5 @@
 import numpy as np
 
-# Define global variables
 rows = 5
 columns = 5
 states = rows * columns
@@ -8,13 +7,11 @@ gamma = 0.9
 V = np.zeros(states)
 VV = np.zeros((rows, columns))
 
-# State assignments for special states AA and BB
 AA = (1 * columns) + 0
 BB = (3 * columns) + 0
 AAprime = (1 * columns) + 4
 BBprime = (3 * columns) + 2
 
-# Setup function
 def setup():
     global rows, columns, states, AA, BB, AAprime, BBprime, V, VV
     rows = 5
@@ -27,7 +24,6 @@ def setup():
     V = np.zeros(states)
     VV = np.zeros((rows, columns))
 
-# Function to compute V
 def compute_V():
     while True:
         delta = 0
@@ -40,7 +36,6 @@ def compute_V():
     update_VV()
     sfa(VV)
 
-# Function to compute V*
 def compute_V_star():
     print(VV)
     while True:
@@ -54,7 +49,6 @@ def compute_V_star():
     update_VV()
     sfa(VV)
 
-# Show Floating-Point Array
 def sfa(array):
     if array.ndim == 1:
         for e in array:
@@ -65,7 +59,6 @@ def sfa(array):
             for j in range(array.shape[1]):
                 print(f"{array[i, j]:5.1f}", end=" ")
 
-# Full backup function
 def full_backup(x, a):
     if x == AA:
         r = 10
@@ -81,48 +74,43 @@ def full_backup(x, a):
         y = next_state(x, a)
     return r + (gamma * V[y])
 
-# Check if move is off grid
 def off_grid(state, a):
     x, y = xy_from_state(state)
-    if a == 0 and y + 1 >= rows:  # Up
+    if a == 0 and y + 1 >= rows:
         return True
-    elif a == 1 and x + 1 >= columns:  # Right
+    elif a == 1 and x + 1 >= columns: 
         return True
-    elif a == 2 and y - 1 < 0:  # Down
+    elif a == 2 and y - 1 < 0:
         return True
-    elif a == 3 and x - 1 < 0:  # Left
+    elif a == 3 and x - 1 < 0:
         return True
     return False
 
 # Get next state based on action
 def next_state(state, a):
     x, y = xy_from_state(state)
-    if a == 0:  # Up
+    if a == 0: 
         y += 1
-    elif a == 1:  # Right
+    elif a == 1:
         x += 1
-    elif a == 2:  # Down
+    elif a == 2: 
         y -= 1
-    elif a == 3:  # Left
+    elif a == 3:
         x -= 1
     return state_from_xy(x, y)
 
-# Convert (x, y) to state index
 def state_from_xy(x, y):
     return y + (x * columns)
 
-# Convert state index to (x, y)
 def xy_from_state(state):
     x = state // columns
     y = state % columns
     return (x, y)
 
-# Update VV from V values
 def update_VV():
     for state in range(states):
         x, y = xy_from_state(state)
         VV[y, x] = V[state]
 
-# Run setup before computations
 setup()
 compute_V()

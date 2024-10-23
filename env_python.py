@@ -33,6 +33,7 @@ class UR5Env(gym.Env):
         mujoco.mj_step(self.model, self.data)
 
         end_effector_pos = self.data.body('wrist_3_link').xpos
+        print(self.data.body('wrist_3_link'))
         target_pos = self.data.body('glass_frame').xpos
         reward = -np.linalg.norm(end_effector_pos - target_pos)
 
