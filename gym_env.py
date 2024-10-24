@@ -19,6 +19,5 @@ obs = env.reset()
 done = False
 while True:
     action = env.action_space.sample()
-    #action = [1,0,1,0,0,0]
     obs, reward, done, info = env.step(action)
     env.render()
