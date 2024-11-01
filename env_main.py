@@ -31,10 +31,6 @@ class MuJoCoEnv(gym.Env):
         self.vacuum_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "adhesion_gripper")
         self.slab_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "slab")
         self.contact_force = ContactForce(self.model, self.data,self.slab_geom_id,self.vacuum_geom_id)
-        print(self.vacuum_geom_id,self.slab_geom_id)
-        for geom_id in range(self.model.ngeom):
-            geom_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
-            print(f"Geom ID: {geom_id}, Name: {geom_name}")
     def _get_info(self) -> dict:
         eef_position, _ = self._controller.get_eef_position()
         target_position = self._target.get_mocap_pose(self._physics)[0:3]
