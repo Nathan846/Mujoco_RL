@@ -28,9 +28,9 @@ class MuJoCoEnv(gym.Env):
         self.error_init()
         self.done = False
         self.add_glass_slab()
-        self.contact_force = ContactForce(self.model, self.data)
         self.vacuum_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "adhesion_gripper")
         self.slab_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "slab")
+        self.contact_force = ContactForce(self.model, self.data,self.slab_geom_id,self.vacuum_geom_id)
         print(self.vacuum_geom_id,self.slab_geom_id)
         for geom_id in range(self.model.ngeom):
             geom_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
@@ -60,7 +60,7 @@ class MuJoCoEnv(gym.Env):
         body_ids = [self.model.body(name).id for name in body_names]
         if self.gravity_compensation:
             for body_id in body_ids:
-                self.model.body_gravcomp[body_id] = 1.0
+                self.model.body_gravcomp[body_id] = 1.0 if "wrist_3_link" in body_names else 0
 
     def control_joints(self):
         joint_names = ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"]
@@ -119,7 +119,8 @@ class MuJoCoEnv(gym.Env):
         time_until_next_step = self.dt - (time.time() - self.step_start)
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
-        self.contact_force.contact_pts(self.vacuum_geom_id,self.slab_geom_id)
+        self.contact_force.contact_pts()
+        self.contact_force.gripper_force()
         self.done = np.linalg.norm(self.error_pos) < 0.01
         self.done = False
         return obs, reward, self.done, {}
@@ -144,4 +145,3 @@ while not done:
     obs, reward, done, info = env.step(action)
 
     time.sleep(0.01)
-

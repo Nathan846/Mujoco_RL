@@ -60,7 +60,7 @@
 
   <worldbody>
       <body name="slab_mocap" mocap="true" pos="0.4 0.2 0.01">
-        <geom name="slab" type="box" size="0.15 0.1 0.005" rgba="0.5 0.5 1 0.3" contype="1" conaffinity="1" />
+        <geom name="slab" type="box" size="0.15 0.1 0.005" rgba="0.5 0.5 1 0.3" contype="1" conaffinity="1" solimp="0.9 0.95 0.001" solref="0.02 1"/>
       </body>
       <body name="base" quat="1 0 0 1" childclass="ur5e">
       <inertial mass="4" pos="0 0 0" diaginertia="0.00443333156 0.00443333156 0.0072"/>
@@ -85,19 +85,19 @@
           <body name="forearm_link" pos="0 -0.131 0.425">
             <inertial mass="2.275" pos="0 0 0.196" diaginertia="0.0311796 0.0311796 0.004095"/>
             <joint name="elbow" class="joint_limited"/>
-            <geom mesh="forearm_0" material="urblue" class="visual"/>
-            <geom mesh="forearm_1" material="linkgray" class="visual"/>
-            <geom mesh="forearm_2" material="black" class="visual"/>
-            <geom mesh="forearm_3" material="jointgray" class="visual"/>
-            <geom class="collision" pos="0 0.08 0" quat="1 1 0 0" size="0.055 0.06"/>
-            <geom class="collision" size="0.038 0.19" pos="0 0 0.2"/>
+            <geom mesh="forearm_0" material="urblue" class="visual" name="f1"/>
+            <geom mesh="forearm_1" material="linkgray" class="visual" name="f2"/>
+            <geom mesh="forearm_2" material="black" class="visual" name="f3"/>
+            <geom mesh="forearm_3" material="jointgray" class="visual" name="f4"/>
+            <geom class="collision" pos="0 0.08 0" quat="1 1 0 0" size="0.055 0.06" name="c1"/>
+            <geom class="collision" size="0.038 0.19" pos="0 0 0.2" name="c2"/>
             <body name="wrist_1_link" pos="0 0 0.392" quat="1 0 1 0">
               <inertial mass="1.219" pos="0 0.127 0" diaginertia="0.0025599 0.0025599 0.0021942"/>
               <joint name="wrist_1"/>
-              <geom mesh="wrist1_0" material="black" class="visual"/>
-              <geom mesh="wrist1_1" material="urblue" class="visual"/>
-              <geom mesh="wrist1_2" material="jointgray" class="visual"/>
-              <geom class="collision" pos="0 0.05 0" quat="1 1 0 0" size="0.04 0.07"/>
+              <geom mesh="wrist1_0" material="black" class="visual" name="w1"/>
+              <geom mesh="wrist1_1" material="urblue" class="visual" name="w2"/>
+              <geom mesh="wrist1_2" material="jointgray" class="visual" name="w3"/>
+              <geom class="collision" pos="0 0.05 0" quat="1 1 0 0" size="0.04 0.07" name="c3"/>
               <body name="wrist_2_link" pos="0 0.127 0">
                 <inertial mass="1.219" pos="0 0 0.1" diaginertia="0.0025599 0.0025599 0.0021942"/>
                 <joint name="wrist_2" axis="0 0 1"/>
