@@ -1,23 +1,25 @@
-import gym
-from gym.envs.registration import register
-from env_python import UR5Env
-# def register_solar_panel_env():
-#     # Register the environment with gym
-#     register(
-#         id='SolarPanel-v0',  # The unique ID for your environment
-#         entry_point='mujoco_solar:SolarPanelEnv',  # Path to your environment class
-#         max_episode_steps=200,  # Set the maximum steps per episode
-#     )
+import numpy as np
+from env_main import MuJoCoEnv
 
-# # Call this function to register the environment
-# register_solar_panel_env()
+# Initialize environment
+env = MuJoCoEnv("ur10e/ur10e.xml")  # Update path to your MuJoCo XML model
 
-# After registering, you can create the environment like this:
-# env = gym.make('SolarPanel-v0')
-env = UR5Env()
 obs = env.reset()
 done = False
-while True:
-    action = env.action_space.sample()
+
+while not done:  # Run for 1000 timesteps or until done
+    # Take a random action
+    action = env.action_space.sample()  # Random action within action space
     obs, reward, done, info = env.step(action)
+
+    # Render the environment
     env.render()
+
+    # Print observations and reward for debugging
+    print(f"Observation: {obs}, Reward: {reward}, Done: {done}, Info: {info}")
+
+    if done:
+        print("Reached the target! Resetting environment.")
+        obs = env.reset()
+
+env.close()

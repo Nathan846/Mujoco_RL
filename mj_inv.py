@@ -26,9 +26,7 @@ class MujocoInverseKinematics:
         
         
         while np.linalg.norm(error) >= self.tol and iterations < max_iterations:
-            mujoco.mj_inverse(self.model, self.data)
             mujoco.mj_forward(self.model, self.data)
-
             current_pos = self.data.body(body_id).xpos
             current_quat = self.data.body(body_id).xquat
             pos_error = np.subtract(goal_pos, current_pos)

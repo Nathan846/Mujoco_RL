@@ -1,170 +1,147 @@
 import mujoco
-import glfw
+import mujoco_viewer
 import numpy as np
 import time
-import mujoco
-import numpy as np
-from scipy.spatial.transform import Rotation as R
-from GaussIK import GaussNewtonIK
-from mj_inv import MujocoInverseKinematics
-class MuJoCoSimulator:
-    def __init__(self, model_path, window_width=800, window_height=600):
+import gym
+from gym import spaces
+from contact_force_modelling import ContactForce
+class MuJoCoEnv(gym.Env):
+    metadata = {"render.modes": ["human"]}
+    
+    def __init__(self, model_path):
+        super(MuJoCoEnv, self).__init__()
+        self.integration_dt = 1.0
+        self.damping = 1e-4
+        self.gravity_compensation = True
+        self.dt = 0.002
+        self.max_angvel = 1.0
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
-        self.window_width = window_width
-        self.window_height = window_height
-        self.gripper_state = False
-        self.ik_solver = GaussNewtonIK(self.model, self.data)
-        self.init_q = np.zeros(6)
-        self.is_rotating = False
-        self.is_panning = False
-        self.is_zooming = False
-        self.last_x, self.last_y = 0.0, 0.0
-        self.cam_azimuth_speed = 0.2
-        self.cam_elevation_speed = 0.2
-        self.zoom_speed = 0.05
-        self.pan_speed = 0.01
-
-        self._init_glfw()
-        self._init_scene()
-        self.ik_solver.set_initial_q(method="zero")
-
-    def key_callback(self, window, key, scancode, action, mods):
-        if action == glfw.PRESS or action == glfw.REPEAT:
-            ee_position = self.get_end_effector_position()
-            if key == glfw.KEY_LEFT:
-                ee_position[1] -= 0.01
-            elif key == glfw.KEY_RIGHT:
-                ee_position[1] += 0.01
-            elif key == glfw.KEY_UP:
-                ee_position[0] += 0.01
-            elif key == glfw.KEY_DOWN:
-                ee_position[0] -= 0.01
-            self.move_end_effector(ee_position, self.get_end_effector_position())
-
-    def mouse_button_callback(self, window, button, action, mods):
-        if button == glfw.MOUSE_BUTTON_LEFT:
-            self.is_rotating = action == glfw.PRESS
-        elif button == glfw.MOUSE_BUTTON_RIGHT:
-            self.is_panning = action == glfw.PRESS
-        elif button == glfw.MOUSE_BUTTON_MIDDLE:
-            self.is_zooming = action == glfw.PRESS
-
-    def cursor_position_callback(self, window, xpos, ypos):
-        dx, dy = xpos - self.last_x, ypos - self.last_y
-        self.last_x, self.last_y = xpos, ypos
-
-        if self.is_rotating:
-            self.cam.azimuth += dx * self.cam_azimuth_speed
-            self.cam.elevation = np.clip(self.cam.elevation - dy * self.cam_elevation_speed, -89.9, 89.9)
-        elif self.is_panning:
-            self.cam.lookat[0] -= dx * self.pan_speed
-            self.cam.lookat[1] += dy * self.pan_speed
-        elif self.is_zooming:
-            self.cam.distance = max(0.1, self.cam.distance - dy * self.zoom_speed)
-
-    def scroll_callback(self, window, xoffset, yoffset):
-        self.cam.distance = max(0.1, self.cam.distance - yoffset * self.zoom_speed)
-    def check_joint_limits(self):
-        """
-        Check if the current joint positions (qpos) are within joint limits.
+        self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
+        self.model.opt.timestep = self.dt
+        self.key_id = self.model.key("home").id
+        self.mocap_id = self.model.body("slab_mocap").mocapid[0]
+        self.grav_compensation()
+        self.control_joints()
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-0.1, high=0.1, shape=(3,), dtype=np.float32)
+        self.error_init()
+        self.done = False
+        self.add_glass_slab()
+        self.contact_force = ContactForce(self.model, self.data)
+        self.vacuum_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "adhesion_gripper")
+        self.slab_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "slab")
+        print(self.vacuum_geom_id,self.slab_geom_id)
+        for geom_id in range(self.model.ngeom):
+            geom_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
+            print(f"Geom ID: {geom_id}, Name: {geom_name}")
+    def _get_info(self) -> dict:
+        eef_position, _ = self._controller.get_eef_position()
+        target_position = self._target.get_mocap_pose(self._physics)[0:3]
+        distance_to_target = np.linalg.norm(eef_position - target_position)
         
-        :param model: MuJoCo model object
-        :param data: MuJoCo data object
-        :return: Boolean indicating whether all joints are within limits
-        """
-        model = self.model
-        data = self.data
-        for i in range(model.njnt):
-            # Get the joint limits from the model
-            lower_limit, upper_limit = model.jnt_range[i]
-            print(f"Upper limit {upper_limit} and Lower limit is {lower_limit}")
-            # Get the current joint position
-            current_pos = data.qpos[i]
-            
-            # Check if current joint position is within limits
-            if current_pos < lower_limit or current_pos > upper_limit:
-                print(f"Joint {i} is out of bounds!")
-                print(f"Joint {i} position: {current_pos}")
-                print(f"Allowed range: [{lower_limit}, {upper_limit}]")
-                return False
-            else:
-                print(f"Joint {i} is within limits: {current_pos}")
-        
-        # If all joints are within limits
-        return True
+        return {
+            "eef_position": eef_position,
+            "target_position": target_position,
+            "distance_to_target": distance_to_target,
+        }
 
-    def _init_glfw(self):
-        if not glfw.init():
-            raise Exception("GLFW initialization failed")
-        self.window = glfw.create_window(self.window_width, self.window_height, "MuJoCo Simulation", None, None)
-        if not self.window:
-            glfw.terminate()
-            raise Exception("Failed to create GLFW window")
+    def add_glass_slab(self, position=[0.2,0.3,0.1]):
+        slab_mocap_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
+        self.data.mocap_pos[slab_mocap_id-1] = np.array([1.0 , 0.0, 0.5])
+        mujoco.mj_forward(self.model, self.data)
 
-        glfw.make_context_current(self.window)
+    def get_slab_midpoint(self):
+        self.slab_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
+        slab_midpt = self.data.xpos[self.slab_body_id]
+        return slab_midpt
+    def grav_compensation(self):
+        body_names = ["shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "wrist_3_link"]
+        body_ids = [self.model.body(name).id for name in body_names]
+        if self.gravity_compensation:
+            for body_id in body_ids:
+                self.model.body_gravcomp[body_id] = 1.0
 
-        # glfw.set_key_callback(self.window, self.key_callback)
-        glfw.set_mouse_button_callback(self.window, self.mouse_button_callback)
-        glfw.set_cursor_pos_callback(self.window, self.cursor_position_callback)
-        glfw.set_scroll_callback(self.window, self.scroll_callback)
+    def control_joints(self):
+        joint_names = ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"]
+        self.dof_ids = np.array([self.model.joint(name).id for name in joint_names])
+        self.actuator_ids = np.array([self.model.actuator(name).id for name in joint_names])
 
-    def _init_scene(self):
-        self.scene = mujoco.MjvScene(self.model, maxgeom=1000)
-        self.cam = mujoco.MjvCamera()
-        self.opt = mujoco.MjvOption()
-        self.context = mujoco.MjrContext(self.model, mujoco.mjtFontScale.mjFONTSCALE_150)
+    def reset(self):
+        mujoco.mj_resetDataKeyframe(self.model, self.data, self.key_id)
+        mujoco.mjv_defaultFreeCamera(self.model, self.viewer.cam)
+        mujoco.mj_resetData(self.model, self.data)
+        self.done = False    
+        self.data.qpos[:] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+        return self._get_obs()
 
-        self.cam.azimuth = 0
-        self.cam.elevation = -30
-        self.cam.distance = 5  # Adjust if necessary
-        self.cam.lookat[:] = np.array([0, 0, 0])  # Adjust based on your robot's position
+    def error_init(self):
+        self.jac = np.zeros((6, self.model.nv))
+        self.diag = self.damping * np.eye(6)
+        self.error = np.zeros(6)
+        self.error_pos = self.error[:3]
+        self.error_ori = self.error[3:]
+        self.site_quat = np.zeros(4)
+        self.site_quat_conj = np.zeros(4)
+        self.error_quat = np.zeros(4)
+        self.site_id = self.model.site("attachment_site").id
+
+    def _get_obs(self):
+        return self.get_end_effector_position()
+
     def get_end_effector_position(self):
-        wrist_3_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "vacuum_gripper")
-        return self.data.site_xpos[wrist_3_site_id].copy()
+        return self.data.site_xpos[self.site_id].copy()
 
-    def move_end_effector(self, goal, quat):
-        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "vacuum_gripper")
-        final_qpos = self.ik_solver.calculate(goal, quat, body_id)
-        self.data.qpos[:6] = final_qpos
+    def step(self, action):
+        self.step_start = time.time()
+        self.data.mocap_pos[self.mocap_id, : 3] = self.get_slab_midpoint()
+        obs = self._get_obs()
+        self.error_pos[:] = self.data.mocap_pos[self.mocap_id] - obs
+        reward = -np.linalg.norm(self.error_pos)
+        mujoco.mju_mat2Quat(self.site_quat, self.data.site_xmat[self.site_id])
+        mujoco.mju_negQuat(self.site_quat_conj, self.site_quat)
+        mujoco.mju_mulQuat(self.error_quat, self.data.mocap_quat[self.mocap_id], self.site_quat_conj)
+        mujoco.mju_quat2Vel(self.error_ori, self.error_quat, 1.0)
+        mujoco.mj_jacSite(self.model, self.data, self.jac[:3], self.jac[3:], self.site_id)
+        dq = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + self.diag, self.error)
+        if self.max_angvel > 0:
+            dq_abs_max = np.abs(dq).max()
+            if dq_abs_max > self.max_angvel:
+                dq *= self.max_angvel / dq_abs_max
 
-    # def new_target_position(self, current_pos, target_pos, epsilon=0.01, convergence_threshold=1e-5):
-    #     new_target_pos = current_pos.copy()
-
-    #     for i in range(3):
-    #         displacement = target_pos[i] - current_pos[i]
-    #         if abs(displacement) < convergence_threshold:
-    #             new_target_pos[i] = target_pos[i]
-    #         else:
-    #             adaptive_epsilon = epsilon if displacement > epsilon else displacement
-    #             step = np.clip(displacement, -adaptive_epsilon, adaptive_epsilon)
-    #             new_target_pos[i] += step
-    #     return new_target_pos
-
-    def render(self):
-        width, height = glfw.get_framebuffer_size(self.window)
-        mujoco.mjv_updateScene(self.model, self.data, self.opt, None, self.cam, mujoco.mjtCatBit.mjCAT_ALL, self.scene)
-        mujoco.mjr_render(mujoco.MjrRect(0, 0, width, height), self.scene, self.context)
-
-    def update(self):
+        q = self.data.qpos.copy()
+        mujoco.mj_integratePos(self.model, q, dq, self.integration_dt)
+        np.clip(q, *self.model.jnt_range.T, out=q)
+        self.data.ctrl[self.actuator_ids] = q[self.dof_ids]
         mujoco.mj_step(self.model, self.data)
-        self.check_joint_limits()
         self.render()
+        time_until_next_step = self.dt - (time.time() - self.step_start)
+        if time_until_next_step > 0:
+            time.sleep(time_until_next_step)
+        self.contact_force.contact_pts(self.vacuum_geom_id,self.slab_geom_id)
+        self.done = np.linalg.norm(self.error_pos) < 0.01
+        self.done = False
+        return obs, reward, self.done, {}
 
-    def run(self):
-        goal_orientation = np.array([0.0, 0.0, 0.0, 1.0])
-        target_pos = np.array([0.8, 1, 0.6])
-        while not glfw.window_should_close(self.window):
-            self.move_end_effector(target_pos, goal_orientation)
-            self.update()
-            glfw.swap_buffers(self.window)
-            glfw.poll_events()
-            time.sleep(0.01)
+    def render(self, mode="human"):
+        self.viewer.render()
 
-        glfw.terminate()
+    def close(self):
+        if self.viewer is not None:
+            self.viewer.close()
+            self.viewer = None
 
 
+import time
+env = MuJoCoEnv("universal_robots_ur5e/scene.xml")
 
-if __name__ == "__main__":
-    simulator = MuJoCoSimulator("ur10e/ur10e.xml")
-    simulator.run()
+obs = env.reset()
+done = False
+
+while not done:
+    action = env.action_space.sample()
+    obs, reward, done, info = env.step(action)
+
+    time.sleep(0.01)
+
