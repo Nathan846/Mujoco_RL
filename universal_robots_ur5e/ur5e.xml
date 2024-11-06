@@ -1,12 +1,13 @@
 <mujoco model="ur5e">
   <compiler angle="radian" meshdir="assets" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" iterations="50"/>
 
   <option integrator="implicitfast"/>
 
   <default>
     <default class="ur5e">
       <default class="visual">
-        <geom type="mesh" contype="0" conaffinity="0" group="2"/>
+        <geom type="mesh" contype="1" conaffinity="1" group="2"/>
       </default>
       <default class="collision">
         <geom type="capsule" group="3"/>
@@ -35,7 +36,7 @@
     <material name="jointgray" rgba="0.278 0.278 0.278 1"/>
     <material name="linkgray" rgba="0.82 0.82 0.82 1"/>
     <material name="urblue" rgba="0.49 0.678 0.8 1"/>
-
+    <material name="linkgray1" rgba="0.5 0.0 0.0 1"/>
     <mesh file="base_0.obj"/>
     <mesh file="base_1.obj"/>
     <mesh file="shoulder_0.obj"/>
@@ -57,9 +58,8 @@
     <mesh file="wrist2_2.obj"/>
     <mesh file="wrist3.obj"/>
   </asset>
-
   <worldbody>
-      <body name="slab_mocap" mocap="true" pos="0.4 0.2 0.01">
+      <body name="slab_mocap" mocap="true" pos="0.8 0.3 0.01">
         <geom name="slab" type="box" size="0.15 0.1 0.005" rgba="0.5 0.5 1 0.3" contype="1" conaffinity="1" solimp="0.9 0.95 0.001" solref="0.02 1"/>
       </body>
       <body name="base" quat="1 0 0 1" childclass="ur5e">
@@ -110,9 +110,7 @@
                   <inertial mass="0.1879" pos="0 0.0771683 0" quat="1 0 0 1"
                     diaginertia="0.000132134 9.90863e-05 9.90863e-05"/>
                   <joint name="wrist_3"/>
-                  <geom material="linkgray" mesh="wrist3" class="visual"/>
-                  <geom name="adhesion_gripper" class="eef_collision" pos="0 0.08 0" quat="1 1 0 0" size="0.04 0.02" contype="1" conaffinity="1" friction="1 0.01 0.005" />
-                  <site name="attachment_site" size="0.01" pos="0 0.1 0" quat="-1 1 1 1" rgba="1 0 0 1" group="1"/>
+                  <geom material="linkgray" mesh="wrist3" class="visual" name="adhesion_gripper" pos="0 0 0" quat="0.01 0 0 0" solimp="0.9 0.95 0.001" solref="0.02 1" size="0.04 0.02" contype="1" rgba="1 1 0.2 1" conaffinity="1" friction="1 0.01 0.005"/>
                 </body>
               </body>
             </body>
@@ -133,6 +131,6 @@
   </actuator>
 
   <keyframe>
-    <key name="home" qpos="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0" ctrl="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0 0"/>
+    <key name="home" qpos="4.84 -0.314 -0.251 -1.45 -1.7608 0" ctrl="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0 0"/>
   </keyframe>
 </mujoco>
