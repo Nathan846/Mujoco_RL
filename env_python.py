@@ -1,197 +1,245 @@
 import mujoco
-import glfw
+import mujoco_viewer
 import numpy as np
 import time
+import gym
+import random
+from gym import spaces
+from contact_force_modelling import ContactForce
+from stable_baselines3 import PPO
+from stable_baselines3.common.env_checker import check_env
+from scipy.interpolate import interp1d
 
-last_x, last_y = 0.0, 0.0
-is_rotating = False
-is_panning = False
-is_zooming = False
-
-cam_azimuth_speed = 0.2
-cam_elevation_speed = 0.2
-zoom_speed = 0.05
-pan_speed = 0.01
-
-ee_position = np.array([0.0, 0.0, 0.0])
-ee_speed = 0.01 
-min_z = 0.1 
-max_z = 1.5 
-x_limits = (-1.0, 1.0)  
-y_limits = (-1.0, 1.0)
-gripper_state = 0  
-
-model = mujoco.MjModel.from_xml_path("ur10e/ur10e.xml")
-data = mujoco.MjData(model)
-
-if not glfw.init():
-    raise Exception("Failed to initialize GLFW")
-
-window = glfw.create_window(800, 600, "MuJoCo Simulation", None, None)
-glfw.make_context_current(window)
-
-scene = mujoco.MjvScene(model, maxgeom=1000)
-cam = mujoco.MjvCamera()
-opt = mujoco.MjvOption()
-context = mujoco.MjrContext(model, mujoco.mjtFontScale.mjFONTSCALE_150)
-gripper_state:bool = False
-cam.azimuth = 45
-cam.elevation = -20
-cam.distance = 5
-cam.lookat = np.array([0.0, 0.0, 0.0])
-
-gripper_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "gripper_geom")
-glass_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "glass_panel")
-
-def get_end_effector_position():
-    wrist_3_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "attachment_site")
-    return data.site_xpos[wrist_3_site_id].copy()
-
-
-
-def toggle_gripper(a):
-    gripper_state = not(a)
-    data.ctrl[-1] = gripper_state
-def is_gripper_touching_glass():
-    for i in range(data.ncon):
-        contact = data.contact[i]
-        if (contact.geom1 == gripper_geom_id and contact.geom2 == glass_geom_id) or \
-           (contact.geom1 == glass_geom_id and contact.geom2 == gripper_geom_id):
-            contact_force = np.zeros(6)
-            mujoco.mj_contactForce(model, data, i, contact_force)
-            return True
-    return False
-
-def move_end_effector(target_pos, current_pos):
-    mujoco.mj_kinematics(model, data)
-    wrist_3_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "attachment_site")
-
-    displacement = target_pos - current_pos
-
-    jacp = np.zeros((3, model.nv))
-    mujoco.mj_jacSite(model, data, jacp, None, wrist_3_site_id)
-
-    # Damped pseudoinverse solution to avoid overshooting
-    lambda_ = 1e-4
-    delta_qpos = np.linalg.pinv(jacp.T @ jacp + lambda_ * np.eye(jacp.shape[1])) @ jacp.T @ displacement
+class MuJoCoEnv(gym.Env):
+    metadata = {"render.modes": ["human"]}
     
-    # Joint position limits for clipping
-    qpos_min = model.jnt_range[:6, 0]
-    qpos_max = model.jnt_range[:6, 1]
+    def __init__(self, model_path, training = False):
+        super(MuJoCoEnv, self).__init__()
+        self.integration_dt = 1.0
+        self.damping = 1e-4
+        self.training = training
+        self.gravity_compensation = True
+        self.dt = 0.01
+        self.max_angvel = 1.0
+        self.model = mujoco.MjModel.from_xml_path(model_path)
+        self.data = mujoco.MjData(self.model)
+        self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
+        self.model.opt.timestep = self.dt
+        self.key_id = self.model.key("home").id
+        self.mocap_id = self.model.body("slab_mocap").mocapid[0]
+        self.grav_compensation()
+        self.control_joints()
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-0.1, high=0.1, shape=(6,), dtype=np.float32)        
+        self.error_init()
+        self.done = False
+        self.add_glass_slab()
+        self.dq = np.zeros(6)
+        self.vacuum_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "adhesion_gripper")
+        self.slab_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "slab")
+        self.contact_force = ContactForce(self.model, self.data,self.slab_geom_id,self.vacuum_geom_id)
+    def _get_info(self) -> dict:
+        eef_position, _ = self._controller.get_eef_position()
+        target_position = self._target.get_mocap_pose(self._physics)[0:3]
+        distance_to_target = np.linalg.norm(eef_position - target_position)
+        
+        return {
+            "eef_position": eef_position,
+            "target_position": target_position,
+            "distance_to_target": distance_to_target,
+        }
 
-    # Update joint positions with a small step
-    data.qpos[:6] = np.clip(data.qpos[:6] + delta_qpos[:6], qpos_min, qpos_max)
-    print(data.qpos)
-    mujoco.mj_forward(model, data)
-def key_callback(window, key, scancode, action, mods):
-    ee_position = get_end_effector_position()
-    if action == glfw.PRESS or action == glfw.REPEAT:
-        if key == glfw.KEY_LEFT:
-            ee_position[1] = max(ee_position[1] - ee_speed, y_limits[0]) 
-        elif key == glfw.KEY_RIGHT:
-            ee_position[1] = min(ee_position[1] + ee_speed, y_limits[1]) 
-        elif key == glfw.KEY_UP:
-            ee_position[0] = min(ee_position[0] + ee_speed, x_limits[1])
-        elif key == glfw.KEY_DOWN:
-            ee_position[0] = max(ee_position[0] - ee_speed, x_limits[0])
-        elif key == glfw.KEY_M:
-            ee_position[2] = min(ee_position[2] + ee_speed, max_z)
-        elif key == glfw.KEY_N:
-            ee_position[2] = max(ee_position[2] - ee_speed, min_z)
-        elif key == glfw.KEY_G:
-            if is_gripper_touching_glass():
-                toggle_gripper(gripper_state)
-        else:
-            return
-        move_end_effector(ee_position, get_end_effector_position())
+    def add_glass_slab(self, position=[0,0,0]):
+        slab_mocap_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
+        # self.data.mocap_pos[slab_mocap_id-1] = np.array([1.0 , 0.0, 0.5])
+        mujoco.mj_forward(self.model, self.data)
 
-def mouse_button_callback(window, button, action, mods):
-    global is_rotating, is_panning, is_zooming
-    if button == glfw.MOUSE_BUTTON_LEFT:
-        is_rotating = action == glfw.PRESS
-    elif button == glfw.MOUSE_BUTTON_RIGHT:
-        is_panning = action == glfw.PRESS
-    elif button == glfw.MOUSE_BUTTON_MIDDLE:
-        is_zooming = action == glfw.PRESS
+    def get_slab_midpoint(self):
+        self.slab_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
+        slab_midpt = self.data.xpos[self.slab_body_id]
+        return slab_midpt
+    def grav_compensation(self):
+        body_names = ["shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "wrist_3_link"]
+        body_ids = [self.model.body(name).id for name in body_names]
+        if self.gravity_compensation:
+            for body_id in body_ids:
+                self.model.body_gravcomp[body_id] = 1.0 if "wrist_3_link" in body_names else 0
+    def control_joints(self):
+        joint_names = ['elbow_joint', 'shoulder_lift_joint', 'shoulder_pan_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+        ac_ids =  ['adhere', 'elbow', 'shoulder_lift', 'shoulder_pan', 'wrist_1', 'wrist_2', 'wrist_3']
+        self.dof_ids = np.array([self.model.joint(name).id for name in joint_names])
+        self.actuator_ids = np.array([self.model.actuator(name).id for name in ac_ids])
 
-def generate_target_position():
-    target_position = np.round(np.random.uniform(-2.0, 2.0, 2), 3)
-    
-    third_value = np.round(np.random.uniform(0.001, 2.0), 3)  # Ensure it is strictly > 0
-    
-    target_position = np.append(target_position, third_value)
-    
-    return target_position
-def cursor_position_callback(window, xpos, ypos):
-    global last_x, last_y, cam, is_rotating, is_panning, is_zooming
-    
-    dx, dy = xpos - last_x, ypos - last_y
-    last_x, last_y = xpos, ypos
+    def reset(self):
+        mujoco.mj_resetDataKeyframe(self.model, self.data, self.key_id)
+        mujoco.mjv_defaultFreeCamera(self.model, self.viewer.cam)
+        mujoco.mj_resetData(self.model, self.data)
+        self.done = False    
+        self.data.qpos = [4.84, -0.314, -0.251, -1.45, -1.7608, 0]
+        mujoco.mj_forward(self.model, self.data)
+        return self._get_obs()
 
-    if is_rotating:
-        cam.azimuth += dx * cam_azimuth_speed
-        cam.elevation = np.clip(cam.elevation - dy * cam_elevation_speed, -89.9, 89.9)
-    
-    elif is_panning:
-        cam.lookat[0] -= dx * pan_speed
-        cam.lookat[1] += dy * pan_speed
-    
-    elif is_zooming:
-        cam.distance = max(0.1, cam.distance - dy * zoom_speed)
+    def get_trajectory(self, joint_angles, total_points=200, decel_points=20):
+        """
+        Interpolates joint angles to a larger number of time points with deceleration towards the end.
+        
+        Parameters:
+        - joint_angles: numpy array of shape (15, 6), original time points.
+        - total_points: int, total interpolated points desired.
+        - decel_points: int, the number of points at the end with decelerated interpolation.
+        
+        Returns:
+        - interpolated_angles: numpy array of shape (total_points, 6), with interpolated values.
+        """
+        original_points = joint_angles.shape[0]
+        
+        # Define time ranges for interpolation
+        time_original = np.linspace(0, 1, original_points)
+        time_linear = np.linspace(0, 0.9, total_points - decel_points)
+        time_decel = np.linspace(0.9, 1, decel_points)
+        time_new = np.concatenate((time_linear, time_decel))
 
-def scroll_callback(window, xoffset, yoffset):
-    global cam
-    cam.distance = max(0.1, cam.distance - yoffset * zoom_speed)
-def new_target_position(current_pos, target_pos, epsilon=0.01, convergence_threshold=1e-5):
-    new_target_pos = current_pos.copy()
-    
-    for i in range(3):
-        if(i==0):
-            print(f"Axis {i}")
-        displacement = target_pos[i] - current_pos[i]
-        if(i==0):
-            print('displacement', displacement)
+        interpolated_angles = np.zeros((total_points, joint_angles.shape[1]))
 
-        if abs(displacement) < convergence_threshold:
-            new_target_pos[i] = target_pos[i]  # Lock the position to the target if within threshold
-            if(i==0):
-                print(f"Axis {i} converged. Setting to target.")
-        else:
-            adaptive_epsilon = epsilon
-            if(displacement <= epsilon):
-                adaptive_epsilon = displacement
-            # adaptive_epsilon = min(epsilon, abs(displacement / 10))  # Divide displacement by 10 for finer steps
-            # adaptive_epsilon = max(adaptive_epsilon, convergence_threshold)  # Ensure epsilon doesn't become too small
-            if(i==0):
-                print('adaptive epsilon', adaptive_epsilon)
-            step = np.clip(displacement, -adaptive_epsilon, adaptive_epsilon)
-            if(i==0):
-                print('step', step)
-            new_target_pos[i] += step
+        for joint in range(joint_angles.shape[1]):
+            linear_interp = interp1d(time_original, joint_angles[:, joint], kind='linear')
+            cubic_interp = interp1d(time_original, joint_angles[:, joint], kind='cubic')
+            
+            interpolated_angles[:total_points - decel_points, joint] = linear_interp(time_linear)
+            interpolated_angles[total_points - decel_points:, joint] = cubic_interp(time_decel)
 
-    return new_target_pos
-geom_name = "glass_panel"
-geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
-target_pos = np.array([0.8,1,0.6])
-glfw.set_key_callback(window, key_callback)
-glfw.set_mouse_button_callback(window, mouse_button_callback)
-glfw.set_cursor_pos_callback(window, cursor_position_callback)
-glfw.set_scroll_callback(window, scroll_callback)
-iterate = 0
-while not glfw.window_should_close(window):
-    mujoco.mj_step(model, data)
-    ee_position = get_end_effector_position()
-    new_target_pos = new_target_position(ee_position, target_pos)
-    print(target_pos-ee_position)
-    move_end_effector(new_target_pos, ee_position)
-    width, height = glfw.get_framebuffer_size(window)
-    mujoco.mjv_updateScene(model, data, opt, None, cam, mujoco.mjtCatBit.mjCAT_ALL, scene)
-    mujoco.mjr_render(mujoco.MjrRect(0, 0, width, height), scene, context)
-    
-    glfw.swap_buffers(window)
-    
-    glfw.poll_events()
+        return interpolated_angles
 
+    def training_step(self):
+        data = np.loadtxdt("joint_anglefile.txt")
+
+        self.get_trajectory(data)
+    
+    def error_init(self):
+        self.jac = np.zeros((6, self.model.nv))
+        self.diag = self.damping * np.eye(6)
+        self.error = np.zeros(6)
+        self.error_pos = self.error[:3]
+        self.error_ori = self.error[3:]
+        self.site_quat = np.zeros(4)
+        self.site_quat_conj = np.zeros(4)
+        self.error_quat = np.zeros(4)
+        self.site_id = self.model.site("attachment_site").id
+    def calculate_reward(self):
+        distance_to_target = np.linalg.norm(self.error_pos[:3])*500
+        
+        reward = -distance_to_target
+        ground_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "ground")
+        
+        for contact in self.data.contact[:self.data.ncon]:
+            if (contact.geom1 == 0) or \
+               (contact.geom2 == ground_geom_id):
+                reward -= 5000
+                print("Penalty applied for ground contact!")
+                continue
+            if(contact.geom1 in [23,30] and contact.geom2 in [23,30]):
+                continue
+            if(contact.geom1 not in [1,30] or contact.geom2 not in [1,30]):
+                print(contact)
+                reward -= 1000
+                print("touching ")
+            if(contact.geom1 in [1,30] and contact.geom2 in [1,30]):
+                reward += 1000
+                print("this is what we want")
+                
+
+        return reward
+    def _get_obs(self):
+        return self.get_end_effector_position()
+
+    def get_end_effector_position(self):
+        return self.data.site_xpos[self.site_id].copy()
+
+    def step(self, action):
+        # if(self.training == True):
+        #     self.training_step()
+        self.step_start = time.time()
+        self.data.mocap_pos[self.mocap_id, : 3] = self.get_slab_midpoint()
+        obs = self._get_obs()
+        self.error_pos[:] = self.data.mocap_pos[self.mocap_id] - obs
+        reward = self.calculate_reward()
+        mujoco.mju_mat2Quat(self.site_quat, self.data.site_xmat[self.site_id])
+        mujoco.mju_negQuat(self.site_quat_conj, self.site_quat)
+        mujoco.mju_mulQuat(self.error_quat, self.data.mocap_quat[self.mocap_id], self.site_quat_conj)
+        mujoco.mju_quat2Vel(self.error_ori, self.error_quat, 1.0)
+        mujoco.mj_jacSite(self.model, self.data, self.jac[:3], self.jac[3:], self.site_id)
+        self.dq = self.jac.T @ np.linalg.solve(self.jac @ self.jac.T + self.diag, self.error)
+        
+        # self.dq += action
+        if self.max_angvel > 0:
+            dq_abs_max = np.abs(self.dq).max()
+            if dq_abs_max > self.max_angvel:
+                self.dq *= self.max_angvel / dq_abs_max
+        print(reward)
+        q = self.data.qpos.copy()
+        mujoco.mj_integratePos(self.model, q, self.dq, self.integration_dt)
+        np.clip(q, *self.model.jnt_range.T, out=q)
+        self.data.ctrl[self.actuator_ids] = q[self.dof_ids]
+        mujoco.mj_step(self.model, self.data)
+        self.render()
+        time_until_next_step = self.dt - (time.time() - self.step_start)
+        if time_until_next_step > 0:
+            time.sleep(time_until_next_step)
+        self.contact_force.contact_pts()
+        self.contact_force.gripper_force()
+        self.done = np.linalg.norm(self.error_pos) < 0.01
+        return obs, reward, self.done, {}
+
+    def render(self, mode="human"):
+        self.viewer.render()
+
+    def close(self):
+        print(self.error)
+        if self.viewer is not None:
+            self.viewer.close()
+            self.viewer = None
+import time
+import gym
+from stable_baselines3 import PPO
+from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.monitor import Monitor
+
+env = MuJoCoEnv("universal_robots_ur5e/scene.xml")
+# done = True
+# while done:
+#     action = random.random()
+#     env.step(action)
+env = Monitor(env)
+
+model = PPO("MlpPolicy", env, verbose=1, n_steps=250)
+
+num_cycles = 1000
+timesteps_per_cycle = 1000
+
+for cycle in range(num_cycles):
+    print(f"Starting training cycle {cycle + 1} of {num_cycles}")
+    
+    model.learn(total_timesteps=timesteps_per_cycle)
+    print(f"Training cycle {cycle + 1} complete")
+    print("ok ac comp")
+
+    model.save(f"ppo_ur5e_cycle_{cycle + 1}")
+
+    # mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=1)
+    # print(f"Cycle {cycle + 1} - Mean reward: {mean_reward} +/- {std_reward}")
+
+    obs = env.reset()
+
+
+print("Training complete for all cycles.")
+print(f"Demonstrating model performance for cycle {cycle + 1}")
+done = True
+while not done:
+    action, _states = model.predict(obs, deterministic=True)
+    obs, reward, done, info = env.step(action)
+    env.render()
     time.sleep(0.01)
-
-glfw.terminate()
+    if done:
+        obs = env.reset()
+        
+print(f"Cycle {cycle + 1} completed and saved. Moving to the next cycle.\n")

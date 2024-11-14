@@ -12,10 +12,10 @@ class MuJoCoDemoEnv:
         self.data = mujoco.MjData(self.model)
         self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
         self.model.opt.timestep = self.dt
-        self.joint_ids = [self.model.joint(name).id for name in ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"]]
+        self.joint_ids = [self.model.joint(name).id for name in  ['elbow_joint', 'shoulder_lift_joint', 'shoulder_pan_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']]
         for geom_id in range(self.model.ngeom):
             geom_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
-            print(f"Geom ID: {geom_id}, Name: {geom_name}")
+            # print(f"Geom ID: {geom_id}, Name: {geom_name}")
     def contact(self):
         with open("contact_forces_train.txt", "a") as file:
             for i in range(self.data.ncon):
@@ -59,32 +59,21 @@ class MuJoCoDemoEnv:
         self.trajectory = interpolated_angles
 
     def execute_trajectory(self):
-        """Executes the interpolated trajectory step-by-step."""
         for joint_angles in self.trajectory:
-            # Set the joint positions to the interpolated angles
             self.data.qpos[:len(joint_angles)] = joint_angles
-            mujoco.mj_forward(self.model, self.data)  # Update the simulation state
+            mujoco.mj_forward(self.model, self.data)  
             self.contact() 
-            self.viewer.render()  # Render the environment
-            time.sleep(self.dt)  # Step time interval to match the simulation
-
-        # Hold the arm at the final position
-        final_position = self.trajectory[-1]
-        while True:
-            self.data.qpos[:len(final_position)] = final_position
-            mujoco.mj_forward(self.model, self.data)
-            self.contact() 
-            self.viewer.render()
+            self.viewer.render() 
             time.sleep(self.dt)
+        
 
     def close(self):
         if self.viewer is not None:
             self.viewer.close()
             self.viewer = None
 
-# Initialize environment and execute demo
 env = MuJoCoDemoEnv("universal_robots_ur5e/scene.xml")
 env.load_trajectory("joint_anglefile.txt")  # Load and interpolate joint angles
-env.execute_trajectory()  # Run the demonstration
+env.execute_trajectory()
 
 env.close()  # Close the environment

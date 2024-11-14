@@ -5,6 +5,8 @@ import time
 import gym
 from gym import spaces
 from contact_force_modelling import ContactForce
+from scipy.interpolate import interp1d
+
 class MuJoCoEnv(gym.Env):
     metadata = {"render.modes": ["human"]}
     
@@ -27,10 +29,10 @@ class MuJoCoEnv(gym.Env):
         self.action_space = spaces.Box(low=-0.1, high=0.1, shape=(3,), dtype=np.float32)
         self.error_init()
         self.done = False
-        self.add_glass_slab()
         self.vacuum_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "adhesion_gripper")
         self.slab_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "slab")
         self.contact_force = ContactForce(self.model, self.data,self.slab_geom_id,self.vacuum_geom_id)
+        self.mocapped = False
     def _get_info(self) -> dict:
         eef_position, _ = self._controller.get_eef_position()
         target_position = self._target.get_mocap_pose(self._physics)[0:3]
@@ -41,11 +43,36 @@ class MuJoCoEnv(gym.Env):
             "target_position": target_position,
             "distance_to_target": distance_to_target,
         }
+    def detach_mocap(self):
+        current_pos = self.data.mocap_pos[self.model.body("slab_mocap").mocapid].copy()
+        current_quat = self.data.mocap_quat[self.model.body("slab_mocap").mocapid].copy()
+        self.data.mocap_pos[self.model.body("slab_mocap").mocapid] = current_pos
+        self.data.mocap_quat[self.model.body("slab_mocap").mocapid] = current_quat
+    def attach_mocap(self):
+        self.mocapped = True
+        end_effector_pos = self.data.xpos[self.model.body("4boxes").id]
+        end_effector_quat = self.data.xquat[self.model.body("4boxes").id]
+        self.data.mocap_pos[self.model.body("slab_mocap").mocapid] = end_effector_pos
+        self.data.mocap_quat[self.model.body("slab_mocap").mocapid] = end_effector_quat
+    def contact(self):
+        with open("contact_forces_train.txt", "a") as file:
+            for i in range(self.data.ncon):
+                contact = self.data.contact[i]
+                if (contact.geom1 == 31 and 
+                    contact.geom2 == 34):
+                    force_contact_frame = np.zeros(6)
+                    mujoco.mj_contactForce(self.model, self.data, i, force_contact_frame)
+                    self.attach_mocap()
+                    normal_force = force_contact_frame[0]
+                    tangential_force_1 = force_contact_frame[1]
+                    tangential_force_2 = force_contact_frame[2]
 
-    def add_glass_slab(self, position=[0.2,0.3,0.1]):
-        slab_mocap_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
-        self.data.mocap_pos[slab_mocap_id-1] = np.array([1.0 , 0.0, 0.5])
-        mujoco.mj_forward(self.model, self.data)
+                    file.write(f"Contact {i} between geom {contact.geom1} and geom {contact.geom2}:\n")
+                    file.write(f"  Normal force: {normal_force}\n")
+                    file.write(f"  Tangential force 1: {tangential_force_1}\n")
+                    file.write(f"  Tangential force 2: {tangential_force_2}\n")
+                    file.write("\n")
+                    return
 
     def get_slab_midpoint(self):
         self.slab_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
@@ -59,9 +86,29 @@ class MuJoCoEnv(gym.Env):
                 self.model.body_gravcomp[body_id] = 1.0 if "wrist_3_link" in body_names else 0
 
     def control_joints(self):
-        joint_names = ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"]
+        joint_names = [
+            'arm3',                # Custom joint name defined in <body> "4boxes"
+            'elbow_joint',         # Elbow joint in the forearm link
+            'shoulder_lift_joint', # Shoulder lift joint in the upper arm link
+            'shoulder_pan_joint',  # Shoulder pan joint in the shoulder link
+            'wrist_1_joint',       # Wrist 1 joint in the wrist_1_link
+            'wrist_2_joint',       # Wrist 2 joint in the wrist_2_link
+            'wrist_3_joint'        # Wrist 3 joint in the wrist_3_link
+        ]
+        
         self.dof_ids = np.array([self.model.joint(name).id for name in joint_names])
-        self.actuator_ids = np.array([self.model.actuator(name).id for name in joint_names])
+        
+        actuator_names = [
+            'shoulder_pan',    # Actuator for shoulder pan joint
+            'shoulder_lift',   # Actuator for shoulder lift joint
+            'elbow',           # Actuator for elbow joint
+            'wrist_1',         # Actuator for wrist 1 joint
+            'wrist_2',         # Actuator for wrist 2 joint
+            'wrist_3',         # Actuator for wrist 3 joint
+            'adhere_wrist'     # Actuator for the adhesion mechanism
+        ]
+        
+        self.actuator_ids = np.array([self.model.actuator(name).id for name in actuator_names])
 
     def reset(self):
         mujoco.mj_resetDataKeyframe(self.model, self.data, self.key_id)
@@ -105,7 +152,12 @@ class MuJoCoEnv(gym.Env):
             dq_abs_max = np.abs(dq).max()
             if dq_abs_max > self.max_angvel:
                 dq *= self.max_angvel / dq_abs_max
-
+        if(self.mocapped):
+            self.load_trajectory(file_path="move_angles.txt")
+            print('two time cap')
+            self.execute_trajectory()
+            self.detach_mocap()
+            self.mocapped = False
         q = self.data.qpos.copy()
         mujoco.mj_integratePos(self.model, q, dq, self.integration_dt)
         np.clip(q, *self.model.jnt_range.T, out=q)
@@ -115,12 +167,35 @@ class MuJoCoEnv(gym.Env):
         time_until_next_step = self.dt - (time.time() - self.step_start)
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
-        self.contact_force.contact_pts()
-        self.contact_force.gripper_force()
         self.done = np.linalg.norm(self.error_pos) < 0.01
         self.done = False
         return obs, reward, self.done, {}
+    def load_trajectory(self, file_path, total_points=200, decel_points=20):
+        joint_angles = np.loadtxt(file_path)  # Load data from text file (15x6 array)
+        original_points = joint_angles.shape[0]
+        
+        time_original = np.linspace(0, 1, original_points)
+        time_linear = np.linspace(0, 0.9, total_points - decel_points)
+        time_decel = np.linspace(0.9, 1, decel_points)
+        time_new = np.concatenate((time_linear, time_decel))
+        interpolated_angles = np.zeros((total_points, joint_angles.shape[1]))
+        
+        for joint in range(joint_angles.shape[1]):
+            linear_interp = interp1d(time_original, joint_angles[:, joint], kind='linear')
+            cubic_interp = interp1d(time_original, joint_angles[:, joint], kind='cubic')
+            interpolated_angles[:total_points - decel_points, joint] = linear_interp(time_linear)
+            interpolated_angles[total_points - decel_points:, joint] = cubic_interp(time_decel)
 
+        self.trajectory = interpolated_angles
+
+    def execute_trajectory(self):
+        for joint_angles in self.trajectory:
+            self.data.qpos[:len(joint_angles)] = joint_angles
+            mujoco.mj_forward(self.model, self.data)  
+            self.contact() 
+            self.viewer.render() 
+            time.sleep(self.dt)
+        print('done traj thing')
     def render(self, mode="human"):
         self.viewer.render()
 
@@ -135,6 +210,8 @@ env = MuJoCoEnv("universal_robots_ur5e/scene.xml")
 
 obs = env.reset()
 done = False
+env.load_trajectory("joint_anglefile.txt")
+env.execute_trajectory()
 
 while not done:
     action = env.action_space.sample()

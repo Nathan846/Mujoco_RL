@@ -1,5 +1,6 @@
-<mujoco model="ur5e">
-  <compiler angle="radian" meshdir="assets" autolimits="true"/>
+<mujoco model="Active adhesion example">
+  <!-- Adding some fluid viscosity to prevent the hanging components from jiggling too much -->
+    <compiler angle="radian" meshdir="assets" autolimits="true"/>
 
   <option integrator="implicitfast"/>
 
@@ -27,14 +28,9 @@
           <geom type="cylinder"/>
         </default>
       </default>
-      <default class="active_adhesion">
-      <geom rgba=".1 0 .5 1" margin=".01" gap=".01" size="3.4 3.4 3.4" />
-      </default>
-
       <site size="0.001" rgba="0.5 0.5 0.5 0.3" group="4"/>
     </default>
   </default>
-
   <asset>
     <material class="ur5e" name="black" rgba="0.033 0.033 0.033 1"/>
     <material class="ur5e" name="jointgray" rgba="0.278 0.278 0.278 1"/>
@@ -63,8 +59,46 @@
     <mesh file="wrist3.obj"/>
   </asset>
 
+
+  <option viscosity="1"/>
+  <size memory="10M"/>
+
+  <visual>
+    <headlight diffuse=".2 .2 .2"/>
+  </visual>
+
+  <default>
+    <joint damping=".3" axis="0 1 0"/>
+    <geom type="box" friction=".5"/>
+    <default class="wall">
+      <geom rgba=".5 .5 .5 .4"/>
+    </default>
+    <default class="mechanical">
+      <geom rgba=".5 .5 .8 1"/>
+      <tendon rgba=".5 .5 .8 1"/>
+    </default>
+    <default class="active_adhesion">
+      <geom rgba=".8 1 .5 1" margin=".01" gap=".01" size="3.4 3.4 3.4" />
+    </default>
+    <default class="object">
+      <geom rgba=".5 0 .5 1" density="100"/>
+    </default>
+  </default>
+
   <worldbody>
-    <light name="spotlight" mode="targetbodycom" target="wrist_2_link" pos="0 -1 2"/>
+    <light pos="0.4 -.15 .6" dir="-1 .5 -1" diffuse=".7 .7 .7"/>
+    <light pos="-.4 -.15 .6" dir="1 .5 -1" diffuse=".7 .7 .7"/>
+
+    <body name="two crates">
+      <joint name="conveyor" type="slide" damping="100" axis="1 0 0"/>
+      <geom size=".2 .1 .01" pos="0 0 -.01"/>
+      <geom size=".01 .08 .031" pos="-.19 0 .03" class="wall"/>
+      <geom size=".01 .08 .031" pos="0 0 .03" class="wall"/>
+      <geom size=".01 .08 .031" pos="0.19 0 .03" class="wall"/>
+      <geom size="0.2 .01 .031" pos="0 -.09 .03" class="wall"/>
+      <geom size="0.2 .01 .031" pos="0 0.09 .03" class="wall"/>
+    </body>
+
     <body name="base" pos="0.8 0 0" quat="1 0 0 1" childclass="ur5e">
       <inertial mass="4.0" pos="0 0 0" diaginertia="0.00443333156 0.00443333156 0.0072"/>
       <geom mesh="base_0" material="black" class="visual"/>
@@ -115,10 +149,8 @@
                   <joint name="wrist_3_joint" class="size1"/>
                   <geom material="linkgray" mesh="wrist3" class="visual"/>
                   <geom name="adhesion_gripper" type="sphere" size="0.001 0.0001 0.01" pos="0 0.08 0" priority="2" margin="0.01" gap="0.01" rgba="0.8 0.5 0.5 1"/>
-                  <body name="4boxes" pos=".002 0.12 0" childclass="active_adhesion" quat="1 1 0 0">
-                    <body name="slab_mocap1" pos="0 0.0 0.01">
-                      <geom name="sla1b" type="box" size="0.35 0.15 0.01" rgba="0.5 0.5 1 0.3" contype="1" conaffinity="1" solimp="0.9 0.95 0.001" solref="0.02 1"/>
-                    </body>
+                  <body name="4boxes" pos=".002 0.1 0" childclass="active_adhesion" quat="1 1 0 0">
+                    <site name="force_sensor" group="3"/>
                     <joint name="arm3" damping=".01" pos="0 -.03 0"/>
                     <geom size=".015 .015 .01" pos="0.015 0.015 0"/>
                     <geom size=".015 .015 .01" pos="0.015 -.015 0"/>
@@ -126,12 +158,19 @@
                     <geom size=".015 .015 .01" pos="-.015 -.015 0"/>
                     <site name="attachment_site" pos="0 0.1 0" quat="1 0 0 0" rgba="1 0 0 1"/>
                     </body>
+
                 </body>
               </body>
             </body>
           </body>
         </body>
       </body>
+    </body>
+
+
+    <body name="box" pos="-.1 0 .05">
+      <freejoint/>
+      <geom size=".05 .05 .05" class="object"/>
     </body>
   </worldbody>
 
@@ -142,10 +181,11 @@
     <general class="size1" name="wrist_1" joint="wrist_1_joint"/>
     <general class="size1" name="wrist_2" joint="wrist_2_joint"/>
     <general class="size1" name="wrist_3" joint="wrist_3_joint"/>
-    <adhesion name="adhere_wrist" body="4boxes" ctrlrange="0 1" gain="1050"/>
+    <position name="conveyor" joint="conveyor" ctrlrange="-.2 .2" ctrllimited="true" kp="400"/>
+    <adhesion name="adhere_arm" body="4boxes" ctrlrange="0 1" gain="5"/>
   </actuator>
 
-  <keyframe>
-    <key name="home" qpos="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0 0" ctrl="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0 0"/>
-  </keyframe>
+  <sensor>
+    <force site="attachment_site"/>
+  </sensor>
 </mujoco>
