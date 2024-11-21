@@ -1,6 +1,5 @@
 <mujoco model="ur5e">
   <compiler angle="radian" meshdir="assets" autolimits="true"/>
-
   <option integrator="implicitfast"/>
 
   <default>
@@ -117,11 +116,8 @@
                   <geom name="adhesion_gripper" type="sphere" size="0.001 0.0001 0.01" pos="0 0.08 0" priority="2" margin="0.01" gap="0.01" rgba="0.8 0.5 0.5 1"/>
                   <body name="4boxes" pos=".002 0.12 0" childclass="active_adhesion" quat="1 1 0 0">
                     <joint name="arm3" damping=".01" pos="0 -.03 0"/>
-                    <geom size=".015 .015 .01" pos="0.015 0.015 0"/>
-                    <geom size=".015 .015 .01" pos="0.015 -.015 0"/>
-                    <geom size=".015 .015 .01" pos="-.015 0.015 0"/>
-                    <geom size=".015 .015 .01" pos="-.015 -.015 0"/>
-                    <site name="attachment_site" pos="0 0.1 0" quat="1 0 0 0" rgba="1 0 0 1"/>
+                    <geom type="cylinder" name="eef" size="0.05 0.005" pos="0 0 0.01" quat="1 0 0 0" rgba="0.2 0.5 0.3 1"/>
+                    <site name="attachment_site" pos="0 0 0" quat="1 0 0 0" rgba="1 0 0 1"/>
                     </body>
                 </body>
               </body>
@@ -141,8 +137,22 @@
     <general class="size1" name="wrist_3" joint="wrist_3_joint"/>
     <adhesion name="adhere_wrist" body="4boxes" ctrlrange="0 1" gain="1050"/>
   </actuator>
+  <sensor>
+      <!-- Sensors for Joint Positions -->
+      <jointpos name="shoulder_pan_pos" joint="shoulder_pan_joint"/>
+      <jointpos name="shoulder_lift_pos" joint="shoulder_lift_joint"/>
+      <jointpos name="elbow_pos" joint="elbow_joint"/>
+      <jointpos name="wrist_1_pos" joint="wrist_1_joint"/>
+      <jointpos name="wrist_2_pos" joint="wrist_2_joint"/>
+      <jointpos name="wrist_3_pos" joint="wrist_3_joint"/>
 
-  <keyframe>
-    <key name="home" qpos="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0 0" ctrl="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0 0"/>
-  </keyframe>
+      <!-- Sensors for Joint Velocities -->
+      <jointvel name="shoulder_pan_vel" joint="shoulder_pan_joint"/>
+      <jointvel name="shoulder_lift_vel" joint="shoulder_lift_joint"/>
+      <jointvel name="elbow_vel" joint="elbow_joint"/>
+      <jointvel name="wrist_1_vel" joint="wrist_1_joint"/>
+      <jointvel name="wrist_2_vel" joint="wrist_2_joint"/>
+      <jointvel name="wrist_3_vel" joint="wrist_3_joint"/>
+
+  </sensor>
 </mujoco>

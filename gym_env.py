@@ -22,6 +22,7 @@ class MuJoCoEnv:
         self.dof_ids = np.arange(self.model.nq)
         self.viewer.vopt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = True
         self.current_angles = np.zeros(len(self.dof_ids))
+        self.last_contact_force = []
         self.gui_initialized = False
         self.app = None
         for body_id in range(self.model.nbody):
@@ -32,9 +33,9 @@ class MuJoCoEnv:
         qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
         slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
-
-        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = [1.5, 0.5, 0.01]  # Update position
-        self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = [1, 0, 0, 0]  # Update orientation (quaternion)
+        self.logs = []
+        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = [1.5, 0.5, 0.01] 
+        self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = [1, 0, 0, 0] 
 
         mujoco.mj_forward(self.model, self.data)
         self.render()
@@ -45,6 +46,8 @@ class MuJoCoEnv:
         print("Initialized Slab Orientation:", self.data.xquat[slab_body_id])
         self.viewer.vopt.flags[mujoco.mjtVisFlag.mjVIS_CONSTRAINT] = True
     def render(self):
+        self.append_logs()
+        self.log_contact_forces()
         if(self.welded):
             self.update_slab_to_match_eef()
         self.viewer.render()
@@ -130,7 +133,6 @@ class MuJoCoEnv:
                 "distance": QSlider(Qt.Horizontal),
             }
 
-            # Configure sliders
             self.cam_sliders["azimuth"].setMinimum(-180)
             self.cam_sliders["azimuth"].setMaximum(180)
             self.cam_sliders["azimuth"].valueChanged.connect(self.update_camera_azimuth)
@@ -143,102 +145,108 @@ class MuJoCoEnv:
             self.cam_sliders["distance"].setMaximum(10)
             self.cam_sliders["distance"].valueChanged.connect(self.update_camera_distance)
 
-            # Add sliders and labels to layout
             for key in self.cam_sliders:
                 cam_layout.addWidget(self.cam_labels[key])
                 cam_layout.addWidget(self.cam_sliders[key])
 
             layout.addLayout(cam_layout)
 
-            # Add close button
             close_button = QPushButton("Close")
             close_button.clicked.connect(self.close_application)
             layout.addWidget(close_button)
 
             self.window.setLayout(layout)
             self.gui_initialized = True
+    def append_logs(self):
+        joint_angles = self.data.qpos[:7].tolist()
+        
+        slab_pos = self.data.qpos[7:10].tolist()
+        slab_quat = self.data.qpos[10:14].tolist()
 
+        # Create log entry
+        log_entry = {
+            "timestamp": time.time(),
+            "joint_angles": joint_angles,
+            "slab_position": slab_pos,
+            "slab_orientation": slab_quat,
+            "contact": self.last_contact_force
+        }
+
+        self.logs.append(log_entry)
     def update_joint_angle(self, joint_index, value):
-        print(self.data.qpos)
         if(joint_index>=7):
             return
         angle_rad = np.radians(value)
+        
         self.current_angles[joint_index] = angle_rad
         current_pos = self.data.qpos
-        slab_pos = self.data.qpos[7:10].copy()  # Slab position (x, y, z)
-        slab_quat = self.data.qpos[10:14].copy()  # Slab orientation (quaternion)
+        slab_pos = self.data.qpos[7:10].copy()  
+        slab_quat = self.data.qpos[10:14].copy()  
         self.data.qpos[:len(self.current_angles)] = self.current_angles
         self.data.qpos[7:10] = slab_pos
         self.data.qpos[10:14] = slab_quat
+        
         mujoco.mj_forward(self.model, self.data)
+        
         self.render()
-        self.log_contact_forces()
+        
+
         self.labels[joint_index].setText(f"Joint {joint_index + 1}: {value}°")
     def update_slab_to_match_eef(self):
-        """Update slab's position and orientation to match the end effector."""
-        # Retrieve body IDs
-        eef_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")  # Replace with EEF body name
+        eef_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
         slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
 
-        # Get the end effector's position and orientation
         eef_pos = self.data.xpos[eef_body_id]
         eef_quat = self.data.xquat[eef_body_id]
 
-        # Update the slab's free joint position and orientation
-        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = eef_pos  # Update position
-        self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = eef_quat  # Update orientation (quaternion)
+        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = eef_pos
+        self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = eef_quat
 
-        # Recompute the simulation state
         mujoco.mj_forward(self.model, self.data)
 
         print("Updated slab position and orientation to match the end effector:")
         print(f"  Position: {eef_pos}")
         print(f"  Orientation (Quat): {eef_quat}")
 
-    def log_contact_forces(self, filename="cf_log.json"):
-        log_data = []  # List to store log entries
+    def log_contact_forces(self):
+        log_data = []  
 
         for i in range(self.data.ncon):
             contact = self.data.contact[i]
+            joint_angles = self.data.qpos[:7].tolist()
+            slab_pos = self.data.qpos[7:10].tolist()
+            slab_quat = self.data.qpos[10:14].tolist()
             
-            if contact.geom1 == 30 and contact.geom2 == 31:  # Replace with correct geom IDs
+            contact_force = np.zeros(6)
+            mujoco.mj_contactForce(self.model, self.data, i, contact_force)
+            contact_force_list = contact_force.tolist()
+
+            log_entry = {
+                "timestamp": time.time(),
+                "joint_angles": joint_angles,
+                "slab_position": slab_pos,
+                "slab_orientation": slab_quat,
+                "contact": {
+                    "geom1": contact.geom1,
+                    "geom2": contact.geom2,
+                    "forces": {
+                        "normal_force": contact_force[0],
+                        "tangential_force_x": contact_force[1],
+                        "tangential_force_y": contact_force[2],
+                        "full_contact_force": contact_force_list
+                    }
+                }
+            }
+            log_data.append(log_entry)
+
+            if contact.geom1 == 30 and contact.geom2 == 31:
                 print(f"Contact detected between Geom1: {contact.geom1} and Geom2: {contact.geom2}")
                 
                 if not self.welded:
                     self.welded = True
                 
-                joint_angles = self.data.qpos[:7].tolist()
-                
-                slab_pos = self.data.qpos[7:10].tolist()
-                slab_quat = self.data.qpos[10:14].tolist()
-                
-                contact_force = np.zeros(6)
-                mujoco.mj_contactForce(self.model, self.data, i, contact_force)
-                contact_force_list = contact_force.tolist()
-
-                log_entry = {
-                    "timestamp": time.time(),
-                    "joint_angles": joint_angles,
-                    "slab_position": slab_pos,
-                    "slab_orientation": slab_quat,
-                    "contact": {
-                        "geom1": contact.geom1,
-                        "geom2": contact.geom2,
-                        "forces": {
-                            "normal_force": contact_force[0],
-                            "tangential_force_x": contact_force[1],
-                            "tangential_force_y": contact_force[2],
-                            "full_contact_force": contact_force_list
-                        }
-                    }
-                }
-                log_data.append(log_entry)
-
-                print(json.dumps(log_entry, indent=4))
-
-        with open(filename, "a") as file:
-            json.dump(log_data, file, indent=4)
+        self.last_contact_force = log_data
 
     def update_camera_azimuth(self, value):
         self.move_camera(azimuth=value)
@@ -262,9 +270,13 @@ class MuJoCoEnv:
         sys.exit(self.app.exec_())
 
     def close_application(self):
+        self.write_logs(filename="contact_angle_success2.json")
         self.close()
         self.window.close()
-
+    def write_logs(self, filename="cf_log.json"):
+        with open(filename, "w") as file:
+            json.dump(self.logs, file, indent=4)
+        print(f"Logs saved to {filename}")
 
 if __name__ == "__main__":
     model_path = "universal_robots_ur5e/scene.xml"
