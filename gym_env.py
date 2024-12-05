@@ -1,5 +1,8 @@
+from threading import Thread
+
 class MuJoCoEnv:
     def __init__(self, model_path):
+        # Initialization as before...
         self.integration_dt = 1.0
         self.damping = 1e-4
         self.gravity_compensation = True
@@ -13,10 +16,10 @@ class MuJoCoEnv:
         self.model.opt.timestep = self.dt
         self.logs = []
 
-        # Initialize GUI-related attributes
         self.gui_initialized = False
         self.app = None
         self.window = None
+        self.simulation_thread = None  # Thread for decoupled simulation
 
         # Initialize slab position
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
@@ -27,11 +30,6 @@ class MuJoCoEnv:
         # Forward simulation to initialize
         mujoco.mj_forward(self.model, self.data)
         self.render()
-
-        slab_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
-        print("Initialized Slab Position:", self.data.xpos[slab_body_id])
-        print("Initialized Slab Orientation:", self.data.xquat[slab_body_id])
-        self.viewer.vopt.flags[mujoco.mjtVisFlag.mjVIS_CONSTRAINT] = True
 
     def render(self):
         mujoco.mj_forward(self.model, self.data)
@@ -53,7 +51,7 @@ class MuJoCoEnv:
                 if self.welded and not self.contact_made:
                     self.welded = False
                     self.contact_made = True
-                    print("Contact made, disabling GUI controls.")
+                    print("Contact made, switching to decoupled rendering.")
 
     def simulate(self):
         while not self.contact_made:
@@ -61,11 +59,16 @@ class MuJoCoEnv:
             mujoco.mj_step(self.model, self.data)
             self.render()
 
-        # Once contact is made, switch to autonomous mode
-        self.run_autonomous_simulation()
+        # After contact is made, switch to a decoupled rendering thread
+        self.start_decoupled_rendering()
 
-    def run_autonomous_simulation(self):
-        print("Running autonomous simulation...")
+    def start_decoupled_rendering(self):
+        print("Starting decoupled rendering...")
+        self.simulation_thread = Thread(target=self.run_physics_loop, daemon=True)
+        self.simulation_thread.start()
+
+    def run_physics_loop(self):
+        """Run simulation in a loop, decoupled from GUI."""
         while True:
             mujoco.mj_step(self.model, self.data)
             self.render()
@@ -116,7 +119,6 @@ class MuJoCoEnv:
             self.init_gui()
         self.window.show()
 
-        # Monitor simulation state and disable GUI if necessary
         while True:
             self.log_contact_forces()
             if self.contact_made:
@@ -125,9 +127,6 @@ class MuJoCoEnv:
             mujoco.mj_step(self.model, self.data)
             self.render()
             QApplication.processEvents()
-
-        # Switch to autonomous simulation after disabling GUI
-        self.run_autonomous_simulation()
 
     def update_joint_angle(self, joint_index, value):
         if self.contact_made:
@@ -151,6 +150,7 @@ if __name__ == "__main__":
     env = MuJoCoEnv(model_path)
 
     try:
+        env.simulate()
         env.run_gui()
     except KeyboardInterrupt:
         print("Simulation interrupted by user.")
