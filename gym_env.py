@@ -6,12 +6,15 @@ import mujoco_viewer
 import sys
 import json
 import time
+from threading import Thread
+
 class MuJoCoEnv:
     def __init__(self, model_path):
+        # Initialization as before...
         self.integration_dt = 1.0
         self.damping = 1e-4
         self.gravity_compensation = True
-        self.dt = 0.002
+        self.dt = 0.00002
         self.contact_made = False
         self.welded = False
         self.max_angvel = 1.0
@@ -19,50 +22,32 @@ class MuJoCoEnv:
         self.data = mujoco.MjData(self.model)
         self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
         self.model.opt.timestep = self.dt
-        self.key_id = self.model.key("home").id
-        self.dof_ids = np.arange(self.model.nq)
-        self.viewer.vopt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = True
-        self.current_angles = np.zeros(len(self.dof_ids))
-        self.last_contact_force = []
+        self.logs = []
+        self.final_contact = False
         self.gui_initialized = False
         self.app = None
-        for body_id in range(self.model.nbody):
-            body_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, body_id)
-            # print(f"Body ID: {body_id}, Body Name: {body_name}")
         self.window = None
-        slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
-        qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
+        self.simulation_thread = None  # Thread for decoupled simulation
+
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
         slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
-        self.logs = []
-        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = [1.5, 0.5, 2.01] 
-        self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = [1, 0, 0, 0] 
+        slab_pos = [1.5, 0.5, 0.01]
+
+        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx + 3] = slab_pos
+        init_quat = [1]
+        self.data.qpos[slab_qpos_start_idx + 3:slab_qpos_start_idx + 7] = [1,0,0,0]
+        self.data.qvel[8:11] = [0, 0, 0]
         mujoco.mj_forward(self.model, self.data)
         self.render()
-        # self.print_all_joints()
-        # self.print_all_geoms()
-        slab_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
-        print("Initialized Slab Position:", self.data.xpos[slab_body_id])
-        print("Initialized Slab Orientation:", self.data.xquat[slab_body_id])
-        self.viewer.vopt.flags[mujoco.mjtVisFlag.mjVIS_CONSTRAINT] = True
-    def render(self):
-        mujoco.mj_forward(self.model, self.data)
-        self.append_logs()
-        self.log_contact_forces()
-        if(self.welded):
-            self.update_slab_to_match_eef()
-        self.viewer.render()
-    def print_all_joints(self):
-        print("\n--- Joint Information ---")
-        for joint_id in range(self.model.njnt):
-            joint_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
-            
-            qpos_start_idx = self.model.jnt_qposadr[joint_id]
-            qpos_size = self.model.jnt_dofadr[joint_id] - qpos_start_idx
+        self.print_all_geoms()
+        self.logs = [{"init_pos":slab_pos,"init_quat":init_quat}]
 
-            print(f"Joint ID: {joint_id}, Name: {joint_name}")
-            print(f"  Position (qpos): {self.data.qpos[qpos_start_idx:qpos_start_idx + qpos_size]}")
-            print(f"  Velocity (qvel): {self.data.qvel[qpos_start_idx:qpos_start_idx + qpos_size]}")
+
+    def render(self):
+        if(self.welded and not self.contact_made):
+            self.update_slab_to_match_eef()
+        mujoco.mj_forward(self.model, self.data)
+        self.viewer.render()
     def print_all_geoms(self):
         print("\n--- Geom Information ---")
         for geom_id in range(self.model.ngeom):
@@ -79,143 +64,37 @@ class MuJoCoEnv:
             print(f"  Position: {geom_pos}")
             print(f"  Orientation (Quat): {geom_quat}")
 
-    def close(self):
-        if self.viewer is not None:
-            self.viewer.close()
-            self.viewer = None
-
-    def move_camera(self, azimuth=None, elevation=None, distance=None):
-        """Move the camera programmatically."""
-        if azimuth is not None:
-            self.viewer.cam.azimuth = azimuth
-        if elevation is not None:
-            self.viewer.cam.elevation = elevation
-        if distance is not None:
-            self.viewer.cam.distance = distance
-
-    def init_gui(self):
-        if not self.gui_initialized:
-            print("cute")
-            self.app = QApplication(sys.argv)
-            self.window = QWidget()
-            self.window.setWindowTitle("Joint Angle and Camera Control")
-            self.window.setGeometry(100, 100, 400, 600)
-
-            layout = QVBoxLayout()
-            self.sliders = []
-            self.labels = []
-
-            for i in range(7):
-                h_layout = QHBoxLayout()
-
-                label = QLabel(f"Joint {i + 1}: 0.0")
-                self.labels.append(label)
-                h_layout.addWidget(label)
-
-                slider = QSlider(Qt.Horizontal)
-                slider.setMinimum(-180)
-                slider.setMaximum(180)
-                slider.setValue(0)
-                slider.valueChanged.connect(lambda value, i=i: self.update_joint_angle(i, value))
-                self.sliders.append(slider)
-                h_layout.addWidget(slider)
-
-                layout.addLayout(h_layout)
-
-            cam_layout = QVBoxLayout()
-            self.cam_labels = {
-                "azimuth": QLabel("Camera Azimuth: 0"),
-                "elevation": QLabel("Camera Elevation: 0"),
-                "distance": QLabel("Camera Distance: 0"),
-            }
-            self.cam_sliders = {
-                "azimuth": QSlider(Qt.Horizontal),
-                "elevation": QSlider(Qt.Horizontal),
-                "distance": QSlider(Qt.Horizontal),
-            }
-
-            self.cam_sliders["azimuth"].setMinimum(-180)
-            self.cam_sliders["azimuth"].setMaximum(180)
-            self.cam_sliders["azimuth"].valueChanged.connect(self.update_camera_azimuth)
-
-            self.cam_sliders["elevation"].setMinimum(-90)
-            self.cam_sliders["elevation"].setMaximum(90)
-            self.cam_sliders["elevation"].valueChanged.connect(self.update_camera_elevation)
-
-            self.cam_sliders["distance"].setMinimum(1)
-            self.cam_sliders["distance"].setMaximum(10)
-            self.cam_sliders["distance"].valueChanged.connect(self.update_camera_distance)
-
-            for key in self.cam_sliders:
-                cam_layout.addWidget(self.cam_labels[key])
-                cam_layout.addWidget(self.cam_sliders[key])
-
-            layout.addLayout(cam_layout)
-
-            close_button = QPushButton("Close")
-            close_button.clicked.connect(self.close_application)
-            layout.addWidget(close_button)
-
-            self.window.setLayout(layout)
-            self.gui_initialized = True
-    def append_logs(self):
+    def log_contact_forces(self):
+        duplicate_count = sum(
+            1 for i in range(self.data.ncon) 
+            if (self.data.contact[i].geom1 == 31 and self.data.contact[i].geom2 == 36) or
+            (self.data.contact[i].geom1 == 36 and self.data.contact[i].geom2 == 31)
+        )
+        log_data = []  
         joint_angles = self.data.qpos[:7].tolist()
-        
         slab_pos = self.data.qpos[7:10].tolist()
         slab_quat = self.data.qpos[10:14].tolist()
 
-        # Create log entry
-        log_entry = {
-            "timestamp": time.time(),
-            "joint_angles": joint_angles,
-            "slab_position": slab_pos,
-            "slab_orientation": slab_quat,
-            "contact": self.last_contact_force
-        }
-
-        self.logs.append(log_entry)
-    def update_joint_angle(self, joint_index, value):
-        if(joint_index>=7 or self.contact_made):
-            return
-        angle_rad = np.radians(value)
-        
-        self.current_angles[joint_index] = angle_rad
-        current_pos = self.data.qpos
-        slab_pos = self.data.qpos[7:10].copy()  
-        slab_quat = self.data.qpos[10:14].copy()  
-        self.data.qpos[:len(self.current_angles)] = self.current_angles
-        
-        mujoco.mj_forward(self.model, self.data)
-        
-        self.render()
-        
-
-        self.labels[joint_index].setText(f"Joint {joint_index + 1}: {value}°")
-    def update_slab_to_match_eef(self):
-        eef_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
-        slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
-        slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
-
-        eef_pos = self.data.xpos[eef_body_id]
-        eef_quat = self.data.xquat[eef_body_id]
-
-        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = eef_pos
-        self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = eef_quat
-
-        mujoco.mj_forward(self.model, self.data)
-
-
-    def log_contact_forces(self):
-        log_data = []  
-
         for i in range(self.data.ncon):
             contact = self.data.contact[i]
-            joint_angles = self.data.qpos[:7].tolist()
-            slab_pos = self.data.qpos[7:10].tolist()
-            slab_quat = self.data.qpos[10:14].tolist()
-            
             contact_force = np.zeros(6)
             mujoco.mj_contactForce(self.model, self.data, i, contact_force)
+            if contact.geom1 == 30 and contact.geom2 == 31:
+                if not self.welded and not self.contact_made:
+                    self.welded = True
+            # if((contact.geom1==31 and contact.geom2 == 36) or (contact.geom1 == 31 and contact.geom2==38)):
+            #     # print('contacting')
+            #     self.contact_made = True
+            axis = self.compute_rotation_axis_from_multiple_contacts()
+            if axis is not None:
+                print("new phase")
+                self.contact_made = True
+            # if (contact.geom1 == 31 and contact.geom2 == 37):
+            #     print(f"Contact detected between Geom1: {contact.geom1} and Geom2: {contact.geom2}")
+            #     if self.welded and not self.contact_made:
+            #         self.welded = False
+            #         self.contact_made = True
+            #         print("Contact made, switching to decoupled rendering.")
             contact_force_list = contact_force.tolist()
 
             log_entry = {
@@ -235,55 +114,206 @@ class MuJoCoEnv:
                 }
             }
             log_data.append(log_entry)
+        self.logs.append(log_data)
+    def update_slab_to_match_eef(self):
+        eef_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
+        slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
+        slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
+        eef_pos = self.data.xpos[eef_body_id]
+        eef_quat = self.data.xquat[eef_body_id]
+        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = eef_pos
+        self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = eef_quat
 
-            if contact.geom1 == 30 and contact.geom2 == 31:
-                print(f"Contact detected between Geom1: {contact.geom1} and Geom2: {contact.geom2}")
-                
-                if not self.welded and not self.contact_made:
-                    self.welded = True
-            if (contact.geom1 == 31 and contact.geom2 == 38) or (contact.geom1 == 31 and contact.geom2 == 36):
-                print(f"Contact detected between Geom1: {contact.geom1} and Geom2: {contact.geom2}")
-                
-                if self.welded and not self.contact_made:
-                    self.welded = False
-                    self.contact_made = True
-                slab_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
-                
-                small_velocity = np.array([0.01, 0.01, 0])
-                self.data.qvel[8:11] = small_velocity
+        mujoco.mj_forward(self.model, self.data)
 
-    def update_camera_azimuth(self, value):
-        self.move_camera(azimuth=value)
-        self.cam_labels["azimuth"].setText(f"Camera Azimuth: {value}")
-        self.render()
+    def simulate(self):
+        while not self.contact_made:
+            self.log_contact_forces()
+            mujoco.mj_step(self.model, self.data)
+            self.render()
+        self.start_decoupled_rendering()
 
-    def update_camera_elevation(self, value):
-        self.move_camera(elevation=value)
-        self.cam_labels["elevation"].setText(f"Camera Elevation: {value}")
-        self.render()
+    def start_decoupled_rendering(self):
+        self.welded = False
+        self.contact_made = True
+        self.dt = 0.02
+        self.logswritten = False
+        while True:
+            if(not self.final_contact):
+                mujoco.mj_step(self.model, self.data)
+                self.log_contact_forces()
+                axis = self.compute_rotation_axis_from_multiple_contacts()
+                print(axis)
+                self.rotate_free_joint(axis)
+                if(not self.logswritten):
+                    self.write_logs("new_angle_config.json")
+                    self.logswritten = True
+            self.viewer.render()
 
-    def update_camera_distance(self, value):
-        self.move_camera(distance=value)
-        self.cam_labels["distance"].setText(f"Camera Distance: {value}")
-        self.render()
+    def get_all_contact_points(self):
+        contact_points = []
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            if (contact.geom1 == 31 and contact.geom2 in [36, 38]) or (contact.geom2 == 31 and contact.geom1 in [36, 38]):
+                contact_points.append(contact.pos)
+        return contact_points
+    def choose_two_points(self,contact_points):
+        if len(contact_points) < 2:
+            print("Not enough contact points to define an axis.")
+            return None
+        contact_points = np.array(contact_points)
+        max_dist = 0
+        chosen_points = None
+        for i in range(len(contact_points)):
+            for j in range(i + 1, len(contact_points)):
+                dist = np.linalg.norm(contact_points[i] - contact_points[j])
+                if dist > max_dist:
+                    max_dist = dist
+                    chosen_points = (contact_points[i], contact_points[j])
+
+        return chosen_points
+    def compute_rotation_axis_from_multiple_contacts(self):
+        contact_points = self.get_all_contact_points()
+        if len(contact_points) < 2:
+            print("Not enough contact points to compute a rotation axis.")
+            return None
+
+        point1, point2 = self.choose_two_points(contact_points)
+        if point1 is None or point2 is None:
+            return None
+
+        # Compute the axis
+        axis = point2 - point1
+        norm = np.linalg.norm(axis)
+        if norm == 0:
+            print("Selected contact points are identical; cannot define a rotation axis.")
+            return None
+
+        return axis / norm
+    def rotate_free_joint(self, axis):
+        """
+        Rotate a free joint using the provided quaternion.
+        :param model: MuJoCo model object.
+        :param data: MuJoCo data object.
+        :param joint_name: Name of the free joint.
+        :param quaternion: Desired rotation quaternion [w, x, y, z].
+        """
+        if(axis is None):
+            return
+        angle = np.radians(30)
+        w = np.cos(angle / 2)
+        x, y, z = np.sin(angle / 2) * axis
+        quat =  np.array([w, x, y, z])
+        joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
+        qpos_start_idx = self.model.jnt_qposadr[joint_id]
+        
+        self.data.qpos[qpos_start_idx + 3:qpos_start_idx + 7] = quat
+
+    def init_gui(self):
+        if not self.gui_initialized:
+            self.app = QApplication(sys.argv)
+            self.window = QWidget()
+            self.window.setWindowTitle("Joint Angle and Camera Control")
+            self.window.setGeometry(100, 100, 400, 600)
+
+            layout = QVBoxLayout()
+            self.sliders = []
+            self.labels = []
+
+            for i in range(7):
+                h_layout = QHBoxLayout()
+
+                # Label for the joint angle
+                label = QLabel(f"Joint {i + 1}: 0.0")
+                self.labels.append(label)
+                h_layout.addWidget(label)
+
+                # Slider for the joint angle
+                slider = QSlider(Qt.Horizontal)
+                slider.setMinimum(-1800)  # -180 scaled by 10
+                slider.setMaximum(1800)  # 180 scaled by 10
+                slider.setValue(0)
+                slider.valueChanged.connect(lambda value, i=i: self.update_joint_angle(i, value / 10.0))
+                self.sliders.append(slider)
+
+                h_layout.addWidget(slider)
+
+                # Buttons for fine control
+                decrement_button = QPushButton("-")
+                decrement_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, -0.1))
+                h_layout.addWidget(decrement_button)
+
+                increment_button = QPushButton("+")
+                increment_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, 0.1))
+                h_layout.addWidget(increment_button)
+
+                layout.addLayout(h_layout)
+
+            # Close button
+            close_button = QPushButton("Close")
+            close_button.clicked.connect(self.close_application)
+            layout.addWidget(close_button)
+
+            self.window.setLayout(layout)
+            self.gui_initialized = True
+
+    def update_joint_angle(self, index, value):
+        self.labels[index].setText(f"Joint {index + 1}: {value:.1f}")
+
+    def adjust_joint_angle(self, index, increment):
+        current_value = self.sliders[index].value() / 10.0  # Convert to float
+        new_value = current_value + increment
+        new_value = max(-180.0, min(180.0, new_value))  # Clamp value between -180 and 180
+        self.sliders[index].setValue(int(new_value * 10))  # Convert back to slider scale
+    def write_logs(self, filename="cf_log.json"):
+            with open(filename, "w") as file:
+                json.dump(self.logs, file, indent=4)
+            print(f"Logs saved to {filename}")
+    def disable_gui(self):
+        """Disable GUI elements after contact is made."""
+        if self.gui_initialized:
+            for slider in self.sliders:
+                slider.setEnabled(False)
 
     def run_gui(self):
         if not self.gui_initialized:
             self.init_gui()
         self.window.show()
-        sys.exit(self.app.exec_())
+
+        while True:
+            self.log_contact_forces()
+            if self.contact_made:
+                self.disable_gui()
+                break
+            self.render()
+            QApplication.processEvents()
+
+    def update_joint_angle(self, joint_index, value):
+        if self.contact_made:
+            return
+        angle_rad = np.radians(value)
+        self.data.qpos[joint_index] = angle_rad
+        mujoco.mj_forward(self.model, self.data)
+        self.render()
+        self.labels[joint_index].setText(f"Joint {joint_index + 1}: {value}°")
 
     def close_application(self):
-        self.write_logs(filename="contact_angle_success2.json")
+        print("Closing application...")
         self.close()
         self.window.close()
-    def write_logs(self, filename="cf_log.json"):
-        with open(filename, "w") as file:
-            json.dump(self.logs, file, indent=4)
-        print(f"Logs saved to {filename}")
+
+    def close(self):
+        self.viewer.close()
 
 if __name__ == "__main__":
     model_path = "universal_robots_ur5e/scene.xml"
     env = MuJoCoEnv(model_path)
 
-    env.run_gui()
+    try:
+        env.run_gui()
+        env.simulate()
+    except KeyboardInterrupt:
+        print("Simulation interrupted by user.")
+    finally:
+        env.close()
+    print("Successfully saved log")

@@ -1,0 +1,6 @@
+Help on built-in function mjv_select in module mujoco._functions:
+
+mmjjvv__sseelleecctt(...) method of builtins.PyCapsule instance
+    mjv_select(m: mujoco._structs.MjModel, d: mujoco._structs.MjData, vopt: mujoco._structs.MjvOption, aspectratio: float, relx: float, rely: float, scn: mujoco._structs.MjvScene, selpnt: numpy.ndarray[numpy.float64[3, 1], flags.writeable], geomid: numpy.ndarray[numpy.int32[1, 1], flags.writeable], flexid: numpy.ndarray[numpy.int32[1, 1], flags.writeable], skinid: numpy.ndarray[numpy.int32[1, 1], flags.writeable]) -> int
+    
+    Select geom, flex or skin with mouse, return bodyid; -1: none selected.
