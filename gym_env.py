@@ -65,16 +65,19 @@ class MuJoCoEnv:
             print(f"  Orientation (Quat): {geom_quat}")
 
     def log_contact_forces(self):
+        print(self.data.contact)
         duplicate_count = sum(
             1 for i in range(self.data.ncon) 
             if (self.data.contact[i].geom1 == 31 and self.data.contact[i].geom2 == 36) or
             (self.data.contact[i].geom1 == 36 and self.data.contact[i].geom2 == 31)
         )
-        log_data = []  
+        log_data = []
         joint_angles = self.data.qpos[:7].tolist()
         slab_pos = self.data.qpos[7:10].tolist()
         slab_quat = self.data.qpos[10:14].tolist()
-
+        joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
+        qpos_start_idx = self.model.jnt_qposadr[joint_id]
+        
         for i in range(self.data.ncon):
             contact = self.data.contact[i]
             contact_force = np.zeros(6)
@@ -84,11 +87,10 @@ class MuJoCoEnv:
                     self.welded = True
             # if((contact.geom1==31 and contact.geom2 == 36) or (contact.geom1 == 31 and contact.geom2==38)):
             #     # print('contacting')
-            #     self.contact_made = True
-            axis = self.compute_rotation_axis_from_multiple_contacts()
-            if axis is not None:
-                print("new phase")
-                self.contact_made = True
+            #     self.contact_made = True[0.57004024 0.46294754 0.42828982 0.52659427]
+            if(self.toggle_state):
+                self.contact_made = True    
+                
             # if (contact.geom1 == 31 and contact.geom2 == 37):
             #     print(f"Contact detected between Geom1: {contact.geom1} and Geom2: {contact.geom2}")
             #     if self.welded and not self.contact_made:
@@ -127,29 +129,31 @@ class MuJoCoEnv:
         mujoco.mj_forward(self.model, self.data)
 
     def simulate(self):
+        print('started ba')
+        print(self.toggle_state)
         while not self.contact_made:
             self.log_contact_forces()
             mujoco.mj_step(self.model, self.data)
             self.render()
+        print('doneba')
         self.start_decoupled_rendering()
 
     def start_decoupled_rendering(self):
         self.welded = False
         self.contact_made = True
-        self.dt = 0.02
+        self.dt = 0.0002
         self.logswritten = False
-            
-            # Set the EEF to the midpoint of "mocap_slab"
+        axis = self.compute_rotation_axis_from_multiple_contacts()
         eef_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
         slab_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
-
+        print(axis)
         tol = 1e-3
         step_size = 0.01
         damping = 1e-4
         nv = self.model.nv
         while True:
             if not self.final_contact:
-                # Step the simulation
+                self.rotate_free_joint(axis)
                 mujoco.mj_step(self.model, self.data)
 
                 # Get current position of the slab
@@ -158,14 +162,11 @@ class MuJoCoEnv:
                 # Set the target position for the EEF
                 goal = slab_pos
 
-                # Compute the error between the EEF and the goal
                 current_pos = self.data.xpos[eef_id]
                 error = np.subtract(goal, current_pos)
 
-                # Perform IK if the error exceeds tolerance
                 if np.linalg.norm(error) >= tol:
-                    # Jacobian matrices
-                    jacp = np.zeros((3, nv))  # Positional Jacobian for the first 6 joints
+                    jacp = np.zeros((3, nv))
                     jacr = np.zeros((3, nv))  # Rotational Jacobian (not used here)
 
                     # Calculate the Jacobian for the EEF
@@ -174,7 +175,6 @@ class MuJoCoEnv:
                     # Calculate delta joint angles for the first 6 joints
                     jacp_6 = jacp[:, :6]
 
-                    # Calculate delta joint angles for the first 6 joints
                     n = jacp_6.shape[1]
                     I = np.identity(n)
                     product = jacp_6.T @ jacp_6 + damping * I
@@ -185,17 +185,13 @@ class MuJoCoEnv:
 
                     delta_q = j_inv @ error
 
-                    # Compute the next step for the first 6 joint angles
                     q = self.data.qpos[:6].copy()
                     q += step_size * delta_q
 
-                    # Check joint limits
                     q = self.check_joint_limits(q)
 
-                    # Update the first 6 joint positions
                     self.data.qpos[:6] = q
                     self.data.ctrl[:6] = q  # Assuming direct control of joint positions
-                        # Apply forward kinematics to update the simulation
                     mujoco.mj_forward(self.model, self.data)
 
                 # Write logs
@@ -205,7 +201,7 @@ class MuJoCoEnv:
                 self.viewer.render()
     def apply_mujoco_ik(self, target_pos, eef_id):
         # Copy the current state
-        mujoco.mj_forward(self.model, self.data)
+        # print(target_pos,self.data.mocap_pos[eef_id][:3])
         
         # Set the target position in the mocap body associated with the end effector
         self.data.mocap_pos[eef_id][:3] = target_pos
@@ -217,36 +213,70 @@ class MuJoCoEnv:
         upper_limits = self.model.jnt_range[:6, 1]  # Upper limits for first 6 joints
         return np.clip(q, lower_limits, upper_limits)
     def get_all_contact_points(self):
-        contact_points = []
+        """
+        Extracts contact points from the MuJoCo contact list and separates them into two lists:
+        - One for contacts involving geom1 == 31 and geom2 == 36
+        - Another for contacts involving geom1 == 31 and geom2 == 38
+
+        :return: Two lists of contact positions, one for geom2 == 36 and another for geom2 == 38
+        """
+        points_geom_36 = []
+        points_geom_38 = []
+
         for i in range(self.data.ncon):
             contact = self.data.contact[i]
-            if (contact.geom1 == 31 and contact.geom2 in [36, 38]) or (contact.geom2 == 31 and contact.geom1 in [36, 38]):
-                contact_points.append(contact.pos)
-        return contact_points
-    def choose_two_points(self,contact_points):
-        if len(contact_points) < 2:
-            print("Not enough contact points to define an axis.")
+            if (contact.geom1 == 31 and contact.geom2 == 36) or \
+            (contact.geom2 == 31 and contact.geom1 == 36):
+                points_geom_36.append(contact.pos)
+            elif (contact.geom1 == 31 and contact.geom2 == 38) or \
+                (contact.geom2 == 31 and contact.geom1 == 38):
+                points_geom_38.append(contact.pos)
+
+        print(f"Points for geom 36: {points_geom_36}")
+        print(f"Points for geom 38: {points_geom_38}")
+
+        return points_geom_36, points_geom_38
+
+
+    def choose_two_points(self, points_geom_36, points_geom_38):
+        """
+        Finds the closest two points, one from each of the two lists, where the distance between
+        them is at least 0.5.
+
+        :param points_geom_36: List of points associated with geom2 == 36
+        :param points_geom_38: List of points associated with geom2 == 38
+        :return: Tuple of two points (point1, point2) or None if no suitable points
+        """
+        if not points_geom_36 or not points_geom_38:
+            print("One or both lists are empty. Cannot find closest points.")
             return None
-        contact_points = np.array(contact_points)
-        max_dist = 0
+
+        points_geom_36 = np.array(points_geom_36)
+        points_geom_38 = np.array(points_geom_38)
+
+        min_dist = float('inf')
         chosen_points = None
-        for i in range(len(contact_points)):
-            for j in range(i + 1, len(contact_points)):
-                dist = np.linalg.norm(contact_points[i] - contact_points[j])
-                if dist > max_dist:
-                    max_dist = dist
-                    chosen_points = (contact_points[i], contact_points[j])
+
+        # Iterate over all pairs of points from the two lists
+        for point_36 in points_geom_36:
+            for point_38 in points_geom_38:
+                dist = np.linalg.norm(point_36 - point_38)
+                if 0.5 <= dist < min_dist:  # Ensure distance is at least 0.5
+                    min_dist = dist
+                    chosen_points = (point_36, point_38)
+
+        if chosen_points is None:
+            print("No points found with the required distance constraint.")
+        else:
+            print(f"Chosen points: {chosen_points}, Distance: {min_dist}")
 
         return chosen_points
     def compute_rotation_axis_from_multiple_contacts(self):
-        contact_points = self.get_all_contact_points()
-        if len(contact_points) < 2:
-            return None
+        contact_points_1,contact_points_2 = self.get_all_contact_points()
 
-        point1, point2 = self.choose_two_points(contact_points)
+        point1, point2 = self.choose_two_points(contact_points_1,contact_points_2)
         if point1 is None or point2 is None:
             return None
-        
         axis = point2 - point1
         norm = np.linalg.norm(axis)
         if norm == 0:
@@ -254,18 +284,38 @@ class MuJoCoEnv:
             return None
 
         return axis / norm
+    
     def rotate_free_joint(self, axis):
         if(axis is None):
             return
-        return
-        theta = np.radians(30)
+        theta = np.radians(0.02)
+        w_r = np.cos(theta / 2)
 
-        rotation = R.from_rotvec(theta * axis)
-        quaternion = [1,0,1,0]
+        x_r, y_r, z_r = axis * np.sin(theta / 2)
+
+        q_r = np.array([w_r, x_r, y_r, z_r])
         joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
         qpos_start_idx = self.model.jnt_qposadr[joint_id]
-        
-        self.data.qpos[qpos_start_idx + 3:qpos_start_idx + 7] = quaternion
+        my_quat = self.data.qpos[qpos_start_idx + 3:qpos_start_idx + 7]
+        new_quat = self.quaternion_multiply(my_quat, q_r)
+        self.data.qpos[qpos_start_idx + 3:qpos_start_idx + 7] = new_quat
+    def quaternion_multiply(self,q1, q2):
+
+        w1, x1, y1, z1 = q1
+
+        w2, x2, y2, z2 = q2
+
+        return np.array([
+
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+
+            w1*z2 + x1*y2 - y1*x2 + z1*w2
+
+        ])
 
     def init_gui(self):
         if not self.gui_initialized:
@@ -277,6 +327,7 @@ class MuJoCoEnv:
             layout = QVBoxLayout()
             self.sliders = []
             self.labels = []
+            self.toggle_state = False  # Variable to track toggle state
 
             for i in range(7):
                 h_layout = QHBoxLayout()
@@ -307,6 +358,12 @@ class MuJoCoEnv:
 
                 layout.addLayout(h_layout)
 
+            # Toggle button
+            self.toggle_button = QPushButton("Toggle OFF")
+            self.toggle_button.setCheckable(True)  # Make it toggleable
+            self.toggle_button.clicked.connect(self.toggle_button_clicked)
+            layout.addWidget(self.toggle_button)
+
             # Close button
             close_button = QPushButton("Close")
             close_button.clicked.connect(self.close_application)
@@ -314,6 +371,16 @@ class MuJoCoEnv:
 
             self.window.setLayout(layout)
             self.gui_initialized = True
+
+    def toggle_button_clicked(self):
+        """
+        Handler for the toggle button. Updates the toggle state and button text.
+        """
+        self.toggle_state = self.toggle_button.isChecked()  # Update state
+        if self.toggle_state:
+            self.toggle_button.setText("Toggle ON")
+        else:
+            self.toggle_button.setText("Toggle OFF")
 
     def update_joint_angle(self, index, value):
         self.labels[index].setText(f"Joint {index + 1}: {value:.1f}")
