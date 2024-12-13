@@ -7,7 +7,7 @@ import sys
 import json
 import time
 from threading import Thread
-
+from scipy.spatial.transform import Rotation as R
 class MuJoCoEnv:
     def __init__(self, model_path):
         # Initialization as before...
@@ -138,18 +138,84 @@ class MuJoCoEnv:
         self.contact_made = True
         self.dt = 0.02
         self.logswritten = False
-        while True:
-            if(not self.final_contact):
-                mujoco.mj_step(self.model, self.data)
-                self.log_contact_forces()
-                axis = self.compute_rotation_axis_from_multiple_contacts()
-                print(axis)
-                self.rotate_free_joint(axis)
-                if(not self.logswritten):
-                    self.write_logs("new_angle_config.json")
-                    self.logswritten = True
-            self.viewer.render()
+            
+            # Set the EEF to the midpoint of "mocap_slab"
+        eef_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
+        slab_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
 
+        tol = 1e-3
+        step_size = 0.01
+        damping = 1e-4
+        nv = self.model.nv
+        while True:
+            if not self.final_contact:
+                # Step the simulation
+                mujoco.mj_step(self.model, self.data)
+
+                # Get current position of the slab
+                slab_pos = self.data.xpos[slab_id]
+
+                # Set the target position for the EEF
+                goal = slab_pos
+
+                # Compute the error between the EEF and the goal
+                current_pos = self.data.xpos[eef_id]
+                error = np.subtract(goal, current_pos)
+
+                # Perform IK if the error exceeds tolerance
+                if np.linalg.norm(error) >= tol:
+                    # Jacobian matrices
+                    jacp = np.zeros((3, nv))  # Positional Jacobian for the first 6 joints
+                    jacr = np.zeros((3, nv))  # Rotational Jacobian (not used here)
+
+                    # Calculate the Jacobian for the EEF
+                    mujoco.mj_jac(self.model, self.data, jacp, jacr, goal, eef_id)
+
+                    # Calculate delta joint angles for the first 6 joints
+                    jacp_6 = jacp[:, :6]
+
+                    # Calculate delta joint angles for the first 6 joints
+                    n = jacp_6.shape[1]
+                    I = np.identity(n)
+                    product = jacp_6.T @ jacp_6 + damping * I
+                    if np.isclose(np.linalg.det(product), 0):
+                        j_inv = np.linalg.pinv(product) @ jacp_6.T
+                    else:
+                        j_inv = np.linalg.inv(product) @ jacp_6.T
+
+                    delta_q = j_inv @ error
+
+                    # Compute the next step for the first 6 joint angles
+                    q = self.data.qpos[:6].copy()
+                    q += step_size * delta_q
+
+                    # Check joint limits
+                    q = self.check_joint_limits(q)
+
+                    # Update the first 6 joint positions
+                    self.data.qpos[:6] = q
+                    self.data.ctrl[:6] = q  # Assuming direct control of joint positions
+                        # Apply forward kinematics to update the simulation
+                    mujoco.mj_forward(self.model, self.data)
+
+                # Write logs
+                if not self.logswritten:
+                    self.write_logs("new_angle_config.json")
+                    self.logswritten = True            
+                self.viewer.render()
+    def apply_mujoco_ik(self, target_pos, eef_id):
+        # Copy the current state
+        mujoco.mj_forward(self.model, self.data)
+        
+        # Set the target position in the mocap body associated with the end effector
+        self.data.mocap_pos[eef_id][:3] = target_pos
+        
+        # Use MuJoCo's inverse kinematics to compute joint positions
+        mujoco.mj_inverse(self.model, self.data)
+    def check_joint_limits(self, q):
+        lower_limits = self.model.jnt_range[:6, 0]  # Lower limits for first 6 joints
+        upper_limits = self.model.jnt_range[:6, 1]  # Upper limits for first 6 joints
+        return np.clip(q, lower_limits, upper_limits)
     def get_all_contact_points(self):
         contact_points = []
         for i in range(self.data.ncon):
@@ -175,14 +241,12 @@ class MuJoCoEnv:
     def compute_rotation_axis_from_multiple_contacts(self):
         contact_points = self.get_all_contact_points()
         if len(contact_points) < 2:
-            print("Not enough contact points to compute a rotation axis.")
             return None
 
         point1, point2 = self.choose_two_points(contact_points)
         if point1 is None or point2 is None:
             return None
-
-        # Compute the axis
+        
         axis = point2 - point1
         norm = np.linalg.norm(axis)
         if norm == 0:
@@ -191,23 +255,17 @@ class MuJoCoEnv:
 
         return axis / norm
     def rotate_free_joint(self, axis):
-        """
-        Rotate a free joint using the provided quaternion.
-        :param model: MuJoCo model object.
-        :param data: MuJoCo data object.
-        :param joint_name: Name of the free joint.
-        :param quaternion: Desired rotation quaternion [w, x, y, z].
-        """
         if(axis is None):
             return
-        angle = np.radians(30)
-        w = np.cos(angle / 2)
-        x, y, z = np.sin(angle / 2) * axis
-        quat =  np.array([w, x, y, z])
+        return
+        theta = np.radians(30)
+
+        rotation = R.from_rotvec(theta * axis)
+        quaternion = [1,0,1,0]
         joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
         qpos_start_idx = self.model.jnt_qposadr[joint_id]
         
-        self.data.qpos[qpos_start_idx + 3:qpos_start_idx + 7] = quat
+        self.data.qpos[qpos_start_idx + 3:qpos_start_idx + 7] = quaternion
 
     def init_gui(self):
         if not self.gui_initialized:
