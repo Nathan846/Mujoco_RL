@@ -1,6 +1,6 @@
 <mujoco model="ur5e scene">
   <include file="ur5e.xml"/>
-
+  <option gravity="0 0 -9.81" />
   <statistic center="0.3 0 0.3" extent="0.8" meansize="0.08"/>
    
   <visual>
@@ -13,6 +13,8 @@
       mark="cross" markrgb=".8 .8 .8"/>
     <material name="grid" texture="grid" texrepeat="1 1" texuniform="true"/>
     <material name="metal_material" rgba="0.7 0.7 0.7 1" specular="0.6" shininess="0.4"/>
+    <material name="geom_material" rgba="0.1 0.3 0.7 0.4" specular="0.6" shininess="0.84"/>
+
   </asset>
 
   <worldbody>
@@ -42,6 +44,8 @@
                     <body name="angled_bar2" pos="0 0 0.1">
                     <inertial pos="0 0 0" mass="1.0" diaginertia="0.001 0.001 0.001"/>
                     <geom name="angled_beam2" type="box" size="0.02 0.7 0.02" pos="-0.15 0 0.175" quat="0.92 0.38 0 0" material="metal_material" contype="1" conaffinity="1"
+                          solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
+                    <geom name="some_geom" type="box" size="0.4 0.26 0.02" pos="0.15 0 0.21" quat="0.92 0.38 0 0" material="geom_material" contype="2" conaffinity="2"
                           solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
                 </body>
 
