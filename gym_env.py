@@ -8,6 +8,7 @@ import json
 import time
 from threading import Thread
 from scipy.spatial.transform import Rotation as R
+LOG_FILE = "trajectories/gentle_place/SAMPLING.json"
 class MuJoCoEnv:
     def __init__(self, model_path):
         self.integration_dt = 1.0
@@ -15,7 +16,7 @@ class MuJoCoEnv:
         self.gravity_compensation = True
         self.dt = 0.00002
         self.contact_made = False
-        self.welded = False
+        self.welded = False 
         self.max_angvel = 1.0
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
@@ -26,7 +27,8 @@ class MuJoCoEnv:
         self.gui_initialized = False
         self.app = None
         self.window = None
-        self.simulation_thread = None 
+        self.simulation_thread = None
+
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
         slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
         slab_pos = [1.5, 0.5, 0.01]
@@ -45,7 +47,12 @@ class MuJoCoEnv:
         if(self.welded and not self.contact_made):
             self.update_slab_to_match_eef()
         mujoco.mj_forward(self.model, self.data)
-        self.viewer.render()
+        try:
+            self.viewer.render()
+        except:
+            self.write_logs(LOG_FILE)
+            print(f"saved data to {LOG_FILE}")
+            sys.exit(0)
     def print_all_geoms(self):
         print("\n--- Geom Information ---")
         for geom_id in range(self.model.ngeom):
@@ -63,7 +70,6 @@ class MuJoCoEnv:
             print(f"  Orientation (Quat): {geom_quat}")
 
     def log_contact_forces(self):
-        print(self.data.contact)
         duplicate_count = sum(
             1 for i in range(self.data.ncon) 
             if (self.data.contact[i].geom1 == 31 and self.data.contact[i].geom2 == 36) or
@@ -71,6 +77,7 @@ class MuJoCoEnv:
         )
         log_data = []
         joint_angles = self.data.qpos[:7].tolist()
+        vel = self.data.qvel.tolist()
         slab_pos = self.data.qpos[7:10].tolist()
         slab_quat = self.data.qpos[10:14].tolist()
         joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
@@ -78,11 +85,14 @@ class MuJoCoEnv:
         
         for i in range(self.data.ncon):
             contact = self.data.contact[i]
+            # print(contact)
+            # print(contact.pos)
             contact_force = np.zeros(6)
             mujoco.mj_contactForce(self.model, self.data, i, contact_force)
             if contact.geom1 == 30 and contact.geom2 == 31:
                 if not self.welded and not self.contact_made:
                     self.welded = True
+                continue    
             # if((contact.geom1==31 and contact.geom2 == 36) or (contact.geom1 == 31 and contact.geom2==38)):
             #     # print('contacting')
             #     self.contact_made = True[0.57004024 0.46294754 0.42828982 0.52659427]
@@ -127,13 +137,10 @@ class MuJoCoEnv:
         mujoco.mj_forward(self.model, self.data)
 
     def simulate(self):
-        print('started ba')
-        print(self.toggle_state)
         while not self.contact_made:
             self.log_contact_forces()
             mujoco.mj_step(self.model, self.data)
             self.render()
-        print('doneba')
         self.start_decoupled_rendering()
 
     def start_decoupled_rendering(self):
@@ -144,7 +151,6 @@ class MuJoCoEnv:
         axis = self.compute_rotation_axis_from_multiple_contacts()
         eef_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
         slab_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
-        print(axis)
         tol = 1e-3
         step_size = 0.01
         damping = 1e-4
@@ -154,8 +160,10 @@ class MuJoCoEnv:
                 self.rotate_free_joint(axis)
                 mujoco.mj_step(self.model, self.data)
 
+                # Get current position of the slab
                 slab_pos = self.data.xpos[slab_id]
 
+                # Set the target position for the EEF
                 goal = slab_pos
 
                 current_pos = self.data.xpos[eef_id]
@@ -163,9 +171,12 @@ class MuJoCoEnv:
 
                 if np.linalg.norm(error) >= tol:
                     jacp = np.zeros((3, nv))
-                    jacr = np.zeros((3, nv)) 
+                    jacr = np.zeros((3, nv))  # Rotational Jacobian (not used here)
+
+                    # Calculate the Jacobian for the EEF
                     mujoco.mj_jac(self.model, self.data, jacp, jacr, goal, eef_id)
 
+                    # Calculate delta joint angles for the first 6 joints
                     jacp_6 = jacp[:, :6]
 
                     n = jacp_6.shape[1]
@@ -184,21 +195,26 @@ class MuJoCoEnv:
                     q = self.check_joint_limits(q)
 
                     self.data.qpos[:6] = q
-                    self.data.ctrl[:6] = q  #
+                    self.data.ctrl[:6] = q  # Assuming direct control of joint positions
                     mujoco.mj_forward(self.model, self.data)
 
                 # Write logs
                 if not self.logswritten:
-                    self.write_logs("new_angle_config.json")
+                    self.write_logs(LOG_FILE)
                     self.logswritten = True            
                 self.viewer.render()
     def apply_mujoco_ik(self, target_pos, eef_id):
+        # Copy the current state
+        # print(target_pos,self.data.mocap_pos[eef_id][:3])
+        
+        # Set the target position in the mocap body associated with the end effector
         self.data.mocap_pos[eef_id][:3] = target_pos
         
+        # Use MuJoCo's inverse kinematics to compute joint positions
         mujoco.mj_inverse(self.model, self.data)
     def check_joint_limits(self, q):
-        lower_limits = self.model.jnt_range[:6, 0]  
-        upper_limits = self.model.jnt_range[:6, 1] 
+        lower_limits = self.model.jnt_range[:6, 0]  # Lower limits for first 6 joints
+        upper_limits = self.model.jnt_range[:6, 1]  # Upper limits for first 6 joints
         return np.clip(q, lower_limits, upper_limits)
     def get_all_contact_points(self):
         """
@@ -245,10 +261,11 @@ class MuJoCoEnv:
         min_dist = float('inf')
         chosen_points = None
 
+        # Iterate over all pairs of points from the two lists
         for point_36 in points_geom_36:
             for point_38 in points_geom_38:
                 dist = np.linalg.norm(point_36 - point_38)
-                if 0.5 <= dist < min_dist:
+                if 0.5 <= dist < min_dist:  # Ensure distance is at least 0.5
                     min_dist = dist
                     chosen_points = (point_36, point_38)
 
@@ -272,24 +289,21 @@ class MuJoCoEnv:
 
         return axis / norm
     
-    def rotate_free_joint(self, axis, angular_velocity=0.4, decay_rate=0.98):
-        if axis is None or np.linalg.norm(axis) == 0:
-            print("Invalid axis for rotation.")
+    def rotate_free_joint(self, axis):
+        if(axis is None):
             return
+        theta = np.radians(0.02)
+        w_r = np.cos(theta / 2)
 
-        axis = axis / np.linalg.norm(axis)
+        x_r, y_r, z_r = axis * np.sin(theta / 2)
 
+        q_r = np.array([w_r, x_r, y_r, z_r])
         joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
-        qvel_start_idx = self.model.jnt_dofadr[joint_id]
-
-        while angular_velocity > 0.01:  
-            qvel_rot = axis * angular_velocity
-            self.data.qvel[qvel_start_idx:qvel_start_idx + 3] = qvel_rot
-
-            mujoco.mj_step(self.model, self.data)
-
-            angular_velocity *= decay_rate
-
+        qpos_start_idx = self.model.jnt_qposadr[joint_id]
+        my_quat = self.data.qpos[qpos_start_idx + 3:qpos_start_idx + 7]
+        new_quat = self.quaternion_multiply(my_quat, q_r)
+        self.data.qpos[qpos_start_idx + 3:qpos_start_idx + 7] = new_quat
+    
     def quaternion_multiply(self,q1, q2):
 
         w1, x1, y1, z1 = q1
@@ -318,24 +332,27 @@ class MuJoCoEnv:
             layout = QVBoxLayout()
             self.sliders = []
             self.labels = []
-            self.toggle_state = False 
+            self.toggle_state = False  # Variable to track toggle state
 
             for i in range(7):
                 h_layout = QHBoxLayout()
 
+                # Label for the joint angle
                 label = QLabel(f"Joint {i + 1}: 0.0")
                 self.labels.append(label)
                 h_layout.addWidget(label)
 
+                # Slider for the joint angle
                 slider = QSlider(Qt.Horizontal)
-                slider.setMinimum(-1800)
-                slider.setMaximum(1800)
+                slider.setMinimum(-1800)  # -180 scaled by 10
+                slider.setMaximum(1800)  # 180 scaled by 10
                 slider.setValue(0)
                 slider.valueChanged.connect(lambda value, i=i: self.update_joint_angle(i, value / 10.0))
                 self.sliders.append(slider)
 
                 h_layout.addWidget(slider)
 
+                # Buttons for fine control
                 decrement_button = QPushButton("-")
                 decrement_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, -0.1))
                 h_layout.addWidget(decrement_button)
@@ -346,11 +363,13 @@ class MuJoCoEnv:
 
                 layout.addLayout(h_layout)
 
+            # Toggle button
             self.toggle_button = QPushButton("Toggle OFF")
-            self.toggle_button.setCheckable(True) 
+            self.toggle_button.setCheckable(True)  # Make it toggleable
             self.toggle_button.clicked.connect(self.toggle_button_clicked)
             layout.addWidget(self.toggle_button)
 
+            # Close button
             close_button = QPushButton("Close")
             close_button.clicked.connect(self.close_application)
             layout.addWidget(close_button)
@@ -362,7 +381,7 @@ class MuJoCoEnv:
         """
         Handler for the toggle button. Updates the toggle state and button text.
         """
-        self.toggle_state = self.toggle_button.isChecked()
+        self.toggle_state = self.toggle_button.isChecked()  # Update state
         if self.toggle_state:
             self.toggle_button.setText("Toggle ON")
         else:
@@ -372,12 +391,11 @@ class MuJoCoEnv:
         self.labels[index].setText(f"Joint {index + 1}: {value:.1f}")
 
     def adjust_joint_angle(self, index, increment):
-        current_value = self.sliders[index].value() / 10.0 
+        current_value = self.sliders[index].value() / 10.0  # Convert to float
         new_value = current_value + increment
-        new_value = max(-180.0, min(180.0, new_value)) 
-        self.sliders[index].setValue(int(new_value * 10))
+        new_value = max(-180.0, min(180.0, new_value))  # Clamp value between -180 and 180
+        self.sliders[index].setValue(int(new_value * 10))  # Convert back to slider scale
     def write_logs(self, filename="cf_log.json"):
-            
             with open(filename, "w") as file:
                 json.dump(self.logs, file, indent=4)
             print(f"Logs saved to {filename}")
