@@ -225,17 +225,12 @@ class MuJoCoEnv:
                     self.logswritten = True            
                 self.viewer.render()
     def apply_mujoco_ik(self, target_pos, eef_id):
-        # Copy the current state
-        # print(target_pos,self.data.mocap_pos[eef_id][:3])
-        
-        # Set the target position in the mocap body associated with the end effector
         self.data.mocap_pos[eef_id][:3] = target_pos
         
-        # Use MuJoCo's inverse kinematics to compute joint positions
         mujoco.mj_inverse(self.model, self.data)
     def check_joint_limits(self, q):
-        lower_limits = self.model.jnt_range[:6, 0]  # Lower limits for first 6 joints
-        upper_limits = self.model.jnt_range[:6, 1]  # Upper limits for first 6 joints
+        lower_limits = self.model.jnt_range[:6, 0]
+        upper_limits = self.model.jnt_range[:6, 1]
         return np.clip(q, lower_limits, upper_limits)
     def get_all_contact_points(self):
         """

@@ -52,48 +52,57 @@ def remove_idle_segments(data, idle_threshold=6):
         last_joint_angles = current_joint_angles
 
     return cleaned_data
-def resample_trajectory(data, target_duration=90):
-    """Resamples the trajectory to fit the target duration while keeping the shape intact."""
-    if len(data) < 2:
-        return data  # Not enough data to interpolate
-
-    start_time = data[0]["timestamp"]
-    end_time = data[-1]["timestamp"]
-    original_duration = end_time - start_time
-
-    if original_duration <= 0:
-        return data  # Avoid division by zero if timestamps are wrong
-
-    sampling_rate = len(data) / original_duration  # Entries per second
-
-    # Determine how many entries the resampled trajectory should have
-    target_steps = int(sampling_rate * target_duration)  # Keep data density consistent
-
-    # Extract original timestamps
-    original_timestamps = np.array([entry["timestamp"] for entry in data])
+def resample_trajectory(data, target_frames=3000):
+    """Resamples the trajectory to exactly `target_frames` frames while preserving the first and last frames."""
+    num_original_frames = len(data)
     
-    # Generate new equally spaced timestamps
-    new_timestamps = np.linspace(start_time, start_time + target_duration, target_steps)
+    if num_original_frames <= target_frames:
+        return data  # No need to resample if already within the limit
 
-    # Interpolation function for different fields
+    # Ensure target_frames does not exceed available data
+    target_frames = min(num_original_frames, target_frames)
+
+    original_timestamps = np.array([entry["timestamp"] for entry in data])
+
+    # Generate safe target indices (avoid out-of-bounds errors)
+    target_indices = np.linspace(0, num_original_frames - 1, target_frames).astype(int)
+    target_indices = np.clip(target_indices, 0, num_original_frames - 1)  # Prevent out-of-bounds indices
+
+    print(f"Original Frames: {num_original_frames}, Target Frames: {target_frames}")
+    print(f"Generated Target Indices (First 10): {target_indices[:10]} ... (Last 10): {target_indices[-10:]}")
+
+    # Interpolation function to ensure all extracted fields are of the same length
     def interpolate_field(field, nested=False):
-        """Handles both normal and nested dictionary fields."""
-        if nested:
-            return interp1d(original_timestamps, np.array([entry[field[0]][field[1]][field[2]] for entry in data]),
-                            axis=0, kind='linear', fill_value="extrapolate")(new_timestamps)
-        return interp1d(original_timestamps, np.array([entry[field] for entry in data]),
-                        axis=0, kind='linear', fill_value="extrapolate")(new_timestamps)
+        """Handles both normal and nested dictionary fields using linear interpolation."""
+        try:
+            if nested:
+                original_values = np.array([entry[field[0]][field[1]][field[2]] for entry in data])
+            else:
+                original_values = np.array([entry[field] for entry in data])
 
+            # Ensure the field has enough data for interpolation
+            x_original = np.linspace(0, num_original_frames - 1, num_original_frames)
+            x_target = np.linspace(0, num_original_frames - 1, target_frames)
+
+            # Create interpolation function and interpolate
+            interp_func = interp1d(x_original, original_values, axis=0, kind='linear', fill_value="extrapolate")
+            return interp_func(x_target)
+        except KeyError as e:
+            print(f"Error: Missing field {field} in trajectory data.")
+            raise e
+
+    # Create interpolated dataset
     interpolated_data = []
-    for i, t in enumerate(new_timestamps):
-        interpolated_data.append({
-            "timestamp": float(t),
+    for i in range(target_frames):  # Ensure we iterate over `target_frames`, not `target_indices`
+        idx = target_indices[i]
+        entry = {
+            "timestamp": float(original_timestamps[idx]),
             "joint_angles": interpolate_field("joint_angles")[i].tolist(),
             "slab_position": interpolate_field("slab_position")[i].tolist(),
             "slab_orientation": interpolate_field("slab_orientation")[i].tolist(),
             "contact": {
-                "geom1": data[0]["contact"]["geom1"],  # Use first contact info
-                "geom2": data[0]["contact"]["geom2"],
+                "geom1": data[idx]["contact"]["geom1"],  # Use first contact info
+                "geom2": data[idx]["contact"]["geom2"],
                 "forces": {
                     "normal_force": 0.0,
                     "tangential_force_x": 0.0,
@@ -101,11 +110,13 @@ def resample_trajectory(data, target_duration=90):
                     "full_contact_force": interpolate_field(["contact", "forces", "full_contact_force"], nested=True)[i].tolist()
                 }
             }
-        })
+        }
+        interpolated_data.append(entry)
 
     return interpolated_data
 
-def smooth_trajectory_data(initial_values, data, window_size=5, target_duration=90):
+
+def smooth_trajectory_data(initial_values, data, window_size=5, target_frames=3000):
     """Smooths trajectory, removes idle time, and resamples to a fixed duration."""
     if len(data) <= window_size:
         return {"initial_values": initial_values, "data": []}, 0
@@ -113,7 +124,7 @@ def smooth_trajectory_data(initial_values, data, window_size=5, target_duration=
     data = remove_idle_segments(data, idle_threshold=6)
 
     # Resample trajectory to match target duration
-    data = resample_trajectory(data, target_duration=target_duration)
+    data = resample_trajectory(data, target_frames=target_frames)
 
     # Extract required data fields
     joint_angles = np.array([entry["joint_angles"] for entry in data])
@@ -155,13 +166,13 @@ def save_json(data, output_path):
     with open(output_path, "w") as file:
         json.dump(data, file, indent=4)
 
-def process_json(input_file, output_file, window_size=5, target_duration=90):
+def process_json(input_file, output_file, window_size=5, target_frames=3000):
 
     raw_data = load_json(input_file)
     initial_values, structured_data = flatten_json_structure(raw_data)
 
     original_count = len(structured_data)
-    smoothed_data, smoothing_effect = smooth_trajectory_data(initial_values, structured_data, window_size, target_duration)
+    smoothed_data, smoothing_effect = smooth_trajectory_data(initial_values, structured_data, window_size, target_frames)
     
     total_time = smoothed_data["data"][-1]["timestamp"] - smoothed_data["data"][0]["timestamp"]
     save_json(smoothed_data, output_file)
@@ -175,4 +186,4 @@ def process_json(input_file, output_file, window_size=5, target_duration=90):
 if __name__ == "__main__":
     input_file_path = "trajectories/test1.json"
     output_file_path = "resampled_smoothed_trajectory.json"
-    process_json(input_file_path, output_file_path, window_size=5, target_duration=90)
+    process_json(input_file_path, output_file_path, window_size=5, target_frames=3000)
