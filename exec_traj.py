@@ -5,14 +5,12 @@ import json
 
 class ReExecuteTrajectory:
     def __init__(self, model_path, trajectory_file):
-        """Initialize the MuJoCo model, viewer, and load the trajectory."""
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
         self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
         self.trajectory, self.init_state = self.load_trajectory(trajectory_file)
 
     def load_trajectory(self, file_path):
-        """Load the trajectory JSON file and extract initial values and data."""
         with open(file_path, "r") as file:
             data = json.load(file)
 
@@ -28,7 +26,6 @@ class ReExecuteTrajectory:
         return trajectory_data, init_state
 
     def set_initial_state(self):
-        """Set the initial state of the MuJoCo environment."""
         slab_position = self.init_state["init_pos"]
         slab_orientation = self.init_state["init_quat"] + [0, 0, 0]  # Extend quaternion if necessary
 
@@ -72,7 +69,7 @@ class ReExecuteTrajectory:
 
 if __name__ == "__main__":
     model_path = "universal_robots_ur5e/scene.xml"
-    trajectory_file = "filtered_smoothed_place20.json"
+    trajectory_file = "resampled_smoothed_trajectory.json"
 
     executor = ReExecuteTrajectory(model_path, trajectory_file)
     try:

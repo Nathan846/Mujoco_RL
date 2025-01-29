@@ -1,15 +1,79 @@
-<?xml version="1.0" ?>
-<mujoco model="ball_model">
-    <option timestep="0.01"/>
+<mujoco model="ur5e scene">
+  <include file="ur5e.xml"/>
 
-    <worldbody>
-        <body name="ball" pos="0 0 3">
-            <joint name="ball_joint" type="free"/>
-            <geom type="sphere" size="0.1" rgba="0.8 0.2 0.2 1"/>
+  <statistic center="0.3 0 0.3" extent="0.8" meansize="0.08"/>
+<equality>
+    <weld body1="dummy_body" body2="slab_mocap" />
+   
+</equality>
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.1 0.1 0.1" specular="0 0 0"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 0.15 0.2" width="512" height="512"
+      mark="cross" markrgb=".8 .8 .8"/>
+    <material name="grid" texture="grid" texrepeat="1 1" texuniform="true"/>
+    <material name="metal_material" rgba="0.7 0.7 0.7 1" specular="0.6" shininess="0.4"/>
+  </asset>
+
+  <worldbody>
+      <body name="dummy_body" pos="0 0 0">
+          <site name="dummy_site" size="0.01" pos="0 0 0" rgba="1 0 0 1"/>
+      </body>
+        <light pos="0 0 1.5" directional="true"/>
+        <body name="slab_mocap" pos="-2 0.5 0.01">
+            <joint name="slab_free" type="free"/>
+            <geom name="slab" type="box" size="0.35 0.15 0.01" rgba="0.5 0.5 1 0.3" contype="1" conaffinity="1" solimp="0.9 0.95 0.001" solref="0.02 1"/>
         </body>
         <geom type="plane" size="10 10 0.1" rgba="0.5 0.5 0.5 1" pos="0 0 0" contype="1" conaffinity="1" solimp="0.99 0.99 0.01" solref="0.02 1"
-      friction="1 0.005 0.0001"/>  
+      friction="1 0.005 0.0001" material="grid"/>  
 
-    </worldbody>
+        <body name="frame_base" pos="-0.15 -0.25 0" quat="0.7 0 0 0.7">
+            <inertial pos="0 0 0" mass="1.0" diaginertia="0.001 0.001 0.001"/>
+            <geom name="base_beam" type="box" size="0.5 0.02 0.01" pos="0.18 0 0.01" material="metal_material" contype="1" conaffinity="1"
+                  solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
+            <geom name="base_stage" type="box" size="0.4 0.2 0.01" pos="0.18 0 0.2" material="metal_material" contype="1" conaffinity="1"
+                  solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
+            <body name="horizontal_support1" pos="0 0 0.01">
+                <inertial pos="0 0 0" mass="1.0" diaginertia="0.001 0.001 0.001"/>
+                <geom name="horizontal_beam1" type="box" size="0.02 0.5 0.02" pos="-0.15 0 0" material="metal_material" quat="0.7 0 0.7 0" contype="1" conaffinity="1"
+                      solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
+                                
+                <body name="vertical_support1" pos="0 0 0">
+                    <inertial pos="0 0 0" mass="1.0" diaginertia="0.001 0.001 0.001"/>
+                    <geom name="vertical_beam1" type="box" size="0.02 0.8 0.02" pos="-0.15 0.3 0" material="metal_material" quat="0 0 0.7 0.7" contype="1" conaffinity="1"
+                          solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
+                    <body name="angled_bar2" pos="0 0 0.1">
+                    <inertial pos="0 0 0" mass="1.0" diaginertia="0.001 0.001 0.001"/>
+                    <geom name="angled_beam2" type="box" size="0.02 0.7 0.02" pos="-0.15 0 0.175" quat="0.92 0.38 0 0" material="metal_material" contype="1" conaffinity="1"
+                          solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
+                </body>
 
+                </body>
+            </body>
+            
+            <body name="horizontal_support2" pos="0 0 0.01">
+                <inertial pos="0 0 0" mass="1.0" diaginertia="0.001 0.001 0.001"/>
+                <geom name="horizontal_beam2" type="box" size="0.02 0.5 0.02" pos="0.5 0 0" material="metal_material" quat="-0.7 0 0.7 0" contype="1" conaffinity="1"
+                      solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
+                
+                <body name="angled_bar3" pos="0.8 0 0.1">
+                    <inertial pos="0 0 0" mass="1.0" diaginertia="0.001 0.001 0.001"/>
+                    <geom name="angled_beam3" type="box" size="0.02 0.7 0.02" pos="-0.3 0 0.175" quat="0.92 0.38 0 0" material="metal_material" contype="1" conaffinity="1"
+                          solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
+                </body>
+                
+                <body name="vertical_support2" pos="0 0 0">
+                    <inertial pos="0 0 0" mass="1.0" diaginertia="0.001 0.001 0.001"/>
+                    <geom name="vertical_beam2" type="box" size="0.02 0.8 0.02" pos="0.5 0.3 0" material="metal_material" quat="0 0 -0.7 0.7" contype="1" conaffinity="1"
+                          solref="0.02 1" solimp="0.9 0.95 0.01" friction="1 0.005 0.0001"/>
+                </body>
+            </body>
+        </body>
+</worldbody>
+  <keyframe>
+    <key name="home" qpos="-1.5708 -1.5708 1.5708 -1.5708 -1.5708 0 0 1 0.5 0.01 0 0 0 0" ctrl="2.89 -2.07 -1.89 -0.88 -4.97 -0.3 0"/>
+  </keyframe>
 </mujoco>
