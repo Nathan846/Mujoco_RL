@@ -1,5 +1,6 @@
 import json
 import numpy as np
+import time
 
 def load_json(file_path):
     """Loads and parses a JSON file."""
@@ -21,11 +22,15 @@ def moving_average(array, window):
     """Applies a moving average filter to smooth numerical data."""
     return np.convolve(array, np.ones(window) / window, mode='valid')
 
+def compute_difference(original, smoothed):
+    """Computes the absolute mean difference between original and smoothed values."""
+    return np.mean(np.abs(np.array(original) - np.array(smoothed)))
+
 def smooth_trajectory_data(initial_values, data, window_size=5):
     """Smooths the trajectory data using a moving average filter while retaining initial values."""
     if len(data) <= window_size:
-        return {"initial_values": initial_values, "data": []}
-    
+        return {"initial_values": initial_values, "data": []}, 0
+
     smoothed_data = []
     data = data[1:]  # Skip first entry if necessary
 
@@ -39,6 +44,9 @@ def smooth_trajectory_data(initial_values, data, window_size=5):
     smoothed_slab_positions = np.apply_along_axis(moving_average, axis=0, arr=slab_positions, window=window_size)
     smoothed_slab_orientations = np.apply_along_axis(moving_average, axis=0, arr=slab_orientations, window=window_size)
     smoothed_contact_forces = np.apply_along_axis(moving_average, axis=0, arr=contact_forces, window=window_size)
+
+    # Compute smoothing effect
+    smoothing_effect = compute_difference(joint_angles[:len(smoothed_joint_angles)], smoothed_joint_angles)
 
     # Reconstruct smoothed trajectory data
     for i in range(len(smoothed_joint_angles)):
@@ -60,12 +68,14 @@ def smooth_trajectory_data(initial_values, data, window_size=5):
         }
         smoothed_data.append(smoothed_entry)
 
-    return {"initial_values": initial_values, "data": smoothed_data}
+    return {"initial_values": initial_values, "data": smoothed_data}, smoothing_effect
 
 def filter_zero_joint_angles(data):
-    """Removes entries where all joint angles are zero."""
+    """Removes entries where all joint angles are zero and returns count of removed entries."""
+    original_length = len(data["data"])
     data["data"] = [entry for entry in data["data"] if any(angle != 0 for angle in entry["joint_angles"])]
-    return data
+    removed_count = original_length - len(data["data"])
+    return data, removed_count
 
 def save_json(data, output_path):
     """Saves processed data to a JSON file."""
@@ -74,15 +84,26 @@ def save_json(data, output_path):
 
 def process_json(input_file, output_file, window_size=5):
     """Main function to process a JSON file, apply smoothing, and save the result."""
+
     raw_data = load_json(input_file)
     initial_values, structured_data = flatten_json_structure(raw_data)
-    smoothed_data = smooth_trajectory_data(initial_values, structured_data, window_size)
-    filtered_data = filter_zero_joint_angles(smoothed_data)
+    total_time = structured_data[-1]["timestamp"]-structured_data[0]["timestamp"]
+    original_count = len(structured_data)
+    smoothed_data, smoothing_effect = smooth_trajectory_data(initial_values, structured_data, window_size)
+    
+    filtered_data, removed_count = filter_zero_joint_angles(smoothed_data)
+    
     save_json(filtered_data, output_file)
+
+    print(f"Processed JSON saved to: {output_file}")
+    print(f"Total execution time: {total_time:.4f} seconds")
+    print(f"Original trajectory entries: {original_count}")
+    print(f"Final trajectory entries after filtering: {len(filtered_data['data'])}")
+    print(f"Entries removed due to zero joint angles: {removed_count}")
+    print(f"Average smoothing effect on joint angles: {smoothing_effect:.4f}")
 
 # Example usage:
 if __name__ == "__main__":
-    input_file_path = "trajectories/gentle_place/place3.json"  # Change this to your input file path
+    input_file_path = "trajectories/gentle_place/place3.json" 
     output_file_path = "filtered_smoothed_place20.json"
     process_json(input_file_path, output_file_path, window_size=5)
-    print(f"Processed JSON saved to: {output_file_path}")
