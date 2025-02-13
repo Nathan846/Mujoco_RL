@@ -8,7 +8,7 @@ import json
 import time
 from threading import Thread
 from scipy.spatial.transform import Rotation as R
-LOG_FILE = "trajectories/test1.json"
+LOG_FILE = "trajectories/gentle_place/place22.json"
 class MuJoCoEnv:
     def __init__(self, model_path):
         self.integration_dt = 1.0
@@ -28,11 +28,11 @@ class MuJoCoEnv:
         self.app = None
         self.window = None
         self.simulation_thread = None
-        self.eef_slab_quat_offset = None
+
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
         slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
         slab_pos = [1.5, 0.5, 0.01]
-        self.eef_slab_pos_offset = None
+
         self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx + 3] = slab_pos
         init_quat = [1]
         self.data.qpos[slab_qpos_start_idx + 3:slab_qpos_start_idx + 7] = [1,0,0,0]
@@ -126,36 +126,15 @@ class MuJoCoEnv:
             log_data.append(log_entry)
         self.logs.append(log_data)
     def update_slab_to_match_eef(self):
-        """Ensure slab follows EEF translation while maintaining proportional rotation."""
         eef_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
         slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
-
         eef_pos = self.data.xpos[eef_body_id]
         eef_quat = self.data.xquat[eef_body_id]
-        slab_pos = self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3]
-        slab_quat = self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7]
-
-        # **On first contact, store the offset**
-        if self.eef_slab_quat_offset is None or self.eef_slab_pos_offset is None:
-            self.eef_slab_quat_offset = self.compute_quat_difference(eef_quat, slab_quat)
-            self.eef_slab_pos_offset = slab_pos - eef_pos  # Store relative position
-
-        # **Update slab translation (xpos) to follow EEF's motion**
-        new_slab_pos = eef_pos + self.eef_slab_pos_offset  # Maintain relative offset
-
-        # **Update slab orientation proportionally**
-        new_slab_quat = self.quaternion_multiply(eef_quat, self.eef_slab_quat_offset)
-
-        # Apply new position & rotation to slab
-        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = new_slab_pos
-        self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = new_slab_quat
+        self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = eef_pos
+        self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = eef_quat
 
         mujoco.mj_forward(self.model, self.data)
-    def compute_quat_difference(self, q1, q2):
-        """Computes the quaternion difference between two orientations."""
-        q1_inv = np.array([q1[0], -q1[1], -q1[2], -q1[3]])  # Inverse of q1
-        return self.quaternion_multiply(q1_inv, q2)  # q_diff = q1⁻¹ * q2
 
     def simulate(self):
         while not self.contact_made:
@@ -225,12 +204,17 @@ class MuJoCoEnv:
                     self.logswritten = True            
                 self.viewer.render()
     def apply_mujoco_ik(self, target_pos, eef_id):
+        # Copy the current state
+        # print(target_pos,self.data.mocap_pos[eef_id][:3])
+        
+        # Set the target position in the mocap body associated with the end effector
         self.data.mocap_pos[eef_id][:3] = target_pos
         
+        # Use MuJoCo's inverse kinematics to compute joint positions
         mujoco.mj_inverse(self.model, self.data)
     def check_joint_limits(self, q):
-        lower_limits = self.model.jnt_range[:6, 0]
-        upper_limits = self.model.jnt_range[:6, 1]
+        lower_limits = self.model.jnt_range[:6, 0]  # Lower limits for first 6 joints
+        upper_limits = self.model.jnt_range[:6, 1]  # Upper limits for first 6 joints
         return np.clip(q, lower_limits, upper_limits)
     def get_all_contact_points(self):
         """

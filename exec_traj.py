@@ -27,8 +27,7 @@ class ReExecuteTrajectory:
 
     def set_initial_state(self):
         slab_position = self.init_state["init_pos"]
-        slab_orientation = self.init_state["init_quat"] + [0, 0, 0]  # Extend quaternion if necessary
-
+        slab_orientation = self.init_state["init_quat"] + [0, 0, 0]
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
         slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
 
@@ -47,13 +46,12 @@ class ReExecuteTrajectory:
             for i in range(len(joint_angles)):
                 self.data.qpos[i] = joint_angles[i]
 
-            # Set slab state
             self.set_slab_state(slab_position, slab_orientation)
 
             mujoco.mj_forward(self.model, self.data)
             self.viewer.render()
 
-            time.sleep(0.02)  # Assuming a 50 Hz control loop
+            time.sleep(0.02)
 
     def set_slab_state(self, slab_position, slab_orientation):
         """Set the slab state in the simulation."""
@@ -69,7 +67,7 @@ class ReExecuteTrajectory:
 
 if __name__ == "__main__":
     model_path = "universal_robots_ur5e/scene.xml"
-    trajectory_file = "resampled_smoothed_trajectory.json"
+    trajectory_file = "trajectories/traj1.json"
 
     executor = ReExecuteTrajectory(model_path, trajectory_file)
     try:

@@ -184,6 +184,6 @@ def process_json(input_file, output_file, window_size=5, target_frames=3000):
     print(f"Average smoothing effect on joint angles: {smoothing_effect:.4f}")
 
 if __name__ == "__main__":
-    input_file_path = "trajectories/test1.json"
-    output_file_path = "resampled_smoothed_trajectory.json"
+    input_file_path = "trajectories/gentle_place/place22.json"
+    output_file_path = "trajectories/traj22.json"
     process_json(input_file_path, output_file_path, window_size=5, target_frames=3000)
