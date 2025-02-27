@@ -5,7 +5,11 @@ import os
 def load_trajectory(file_path):
     with open(file_path, 'r') as f:
         data = json.load(f)
-    joint_angles = [entry['joint_angles'] for entry in data['data']]
+    try:
+        joint_angles = [entry['joint_angles'][:5] for entry in data['data']]
+    except:
+        print(file_path)
+        pass
     return np.array(joint_angles)
 
 def calculate_rmse(traj1_joint_angles, traj2_joint_angles):
@@ -18,7 +22,7 @@ def calculate_rmse(traj1_joint_angles, traj2_joint_angles):
     rmse = np.sqrt(mse)
     return rmse
 
-first_file = 'trajectories/traj1.json'
+first_file = 'trajectories/traj_rebalanced6.json'
 traj1_joint_angles = load_trajectory(first_file)
 
 folder_path = 'trajectories'

@@ -52,39 +52,47 @@ def remove_idle_segments(data, idle_threshold=6):
         last_joint_angles = current_joint_angles
 
     return cleaned_data
-def resample_trajectory(data, target_frames=3000):
-    """Resamples the trajectory to exactly `target_frames` frames while preserving the first and last frames."""
-    num_original_frames = len(data)
+def resample_trajectory(data, target_frames=3000, extra_last_fraction=0.1, extra_frame_multiplier=2):
+    """Resamples trajectory with extra emphasis on the last fraction of the trajectory."""
     
+    num_original_frames = len(data)
     if num_original_frames <= target_frames:
         return data  # No need to resample if already within the limit
 
-    # Ensure target_frames does not exceed available data
-    target_frames = min(num_original_frames, target_frames)
+    # Determine normal and extra frame counts
+    normal_fraction = 1.0 - extra_last_fraction
+    normal_frames = int(target_frames * normal_fraction)
+    extra_frames = target_frames - normal_frames
 
-    original_timestamps = np.array([entry["timestamp"] for entry in data])
+    split_index = int(num_original_frames * normal_fraction)  # 90% split
+    normal_part = data[:split_index]
+    extra_part = data[split_index:]
 
-    # Generate safe target indices (avoid out-of-bounds errors)
-    target_indices = np.linspace(0, num_original_frames - 1, target_frames).astype(int)
-    target_indices = np.clip(target_indices, 0, num_original_frames - 1)  # Prevent out-of-bounds indices
+    # Ensure resampling does not exceed available data
+    normal_frames = min(len(normal_part), normal_frames)
+    extra_frames = min(len(extra_part) * extra_frame_multiplier, extra_frames)
+
+    # Resample both sections separately
+    normal_indices = np.linspace(0, len(normal_part) - 1, normal_frames).astype(int)
+    extra_indices = np.linspace(0, len(extra_part) - 1, extra_frames).astype(int)
+
+    final_indices = np.concatenate((normal_indices, extra_indices + split_index))  # Adjust extra indices
 
     print(f"Original Frames: {num_original_frames}, Target Frames: {target_frames}")
-    print(f"Generated Target Indices (First 10): {target_indices[:10]} ... (Last 10): {target_indices[-10:]}")
+    print(f"Frames Allocated: {normal_frames} (First 90%) + {extra_frames} (Last 10%)")
 
-    # Interpolation function to ensure all extracted fields are of the same length
     def interpolate_field(field, nested=False):
-        """Handles both normal and nested dictionary fields using linear interpolation."""
+        """Handles interpolation of both normal and nested fields."""
         try:
             if nested:
                 original_values = np.array([entry[field[0]][field[1]][field[2]] for entry in data])
             else:
                 original_values = np.array([entry[field] for entry in data])
 
-            # Ensure the field has enough data for interpolation
+            # Create interpolation function and interpolate
             x_original = np.linspace(0, num_original_frames - 1, num_original_frames)
             x_target = np.linspace(0, num_original_frames - 1, target_frames)
 
-            # Create interpolation function and interpolate
             interp_func = interp1d(x_original, original_values, axis=0, kind='linear', fill_value="extrapolate")
             return interp_func(x_target)
         except KeyError as e:
@@ -93,15 +101,15 @@ def resample_trajectory(data, target_frames=3000):
 
     # Create interpolated dataset
     interpolated_data = []
-    for i in range(target_frames):  # Ensure we iterate over `target_frames`, not `target_indices`
-        idx = target_indices[i]
+    for i in range(target_frames):  
+        idx = final_indices[i]
         entry = {
-            "timestamp": float(original_timestamps[idx]),
+            "timestamp": float(data[idx]["timestamp"]),
             "joint_angles": interpolate_field("joint_angles")[i].tolist(),
             "slab_position": interpolate_field("slab_position")[i].tolist(),
             "slab_orientation": interpolate_field("slab_orientation")[i].tolist(),
             "contact": {
-                "geom1": data[idx]["contact"]["geom1"],  # Use first contact info
+                "geom1": data[idx]["contact"]["geom1"],
                 "geom2": data[idx]["contact"]["geom2"],
                 "forces": {
                     "normal_force": 0.0,
@@ -114,7 +122,6 @@ def resample_trajectory(data, target_frames=3000):
         interpolated_data.append(entry)
 
     return interpolated_data
-
 
 def smooth_trajectory_data(initial_values, data, window_size=5, target_frames=3000):
     """Smooths trajectory, removes idle time, and resamples to a fixed duration."""
@@ -184,6 +191,6 @@ def process_json(input_file, output_file, window_size=5, target_frames=3000):
     print(f"Average smoothing effect on joint angles: {smoothing_effect:.4f}")
 
 if __name__ == "__main__":
-    input_file_path = "trajectories/gentle_place/place22.json"
-    output_file_path = "trajectories/traj22.json"
-    process_json(input_file_path, output_file_path, window_size=5, target_frames=3000)
+    input_file_path = "traj_trace/place_26.json"
+    output_file_path = "trajectories/traj_rebalanced39.json"
+    process_json(input_file_path, output_file_path, window_size=5, target_frames=5000)
