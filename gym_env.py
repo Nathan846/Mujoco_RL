@@ -8,7 +8,7 @@ import json
 import time
 from threading import Thread
 from scipy.spatial.transform import Rotation as R
-LOG_FILE = "traj_trace/place_27.json"
+LOG_FILE = "traj_trace/place_40.json"
 class MuJoCoEnv:
     def __init__(self, model_path):
         self.integration_dt = 1.0

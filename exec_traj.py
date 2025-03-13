@@ -67,7 +67,7 @@ class ReExecuteTrajectory:
 
 if __name__ == "__main__":
     model_path = "universal_robots_ur5e/scene.xml"
-    trajectory_file = "trajectories/traj1.json"
+    trajectory_file = "trajectories/traj_rebalanced4.json"
 
     executor = ReExecuteTrajectory(model_path, trajectory_file)
     try:

@@ -178,7 +178,7 @@ def process_trajectory(trajectory_data):
 def load_trajectories_from_folder(folder_path):
     trajectories = []
     json_files = glob.glob(os.path.join(folder_path, "*.json"))
-    print(f"Found {len(json_files)} trajectory files in {folder_path}")
+    print(f"Found 72 trajectory files in {folder_path}")
     for file in json_files:
         with open(file, 'r') as f:
             try:
@@ -198,7 +198,13 @@ class DemoDataset(Dataset):
             states_list.append(traj["states"])
             actions_list.append(traj["actions"])
             options_list.append(traj["options"])
-        self.states = np.concatenate(states_list, axis=0)
+        print(states_list)
+        valid_size = states_list[0].shape[1]  # Get the expected size along dimension 1
+
+        filtered_states = [arr for arr in states_list if arr.shape[1] == valid_size]
+
+        # Concatenate only the valid ones
+        self.states = np.concatenate(filtered_states, axis=0)
         self.actions = np.concatenate(actions_list, axis=0)
         self.options = np.concatenate(options_list, axis=0)
         print("Total samples:", len(self.states))
@@ -254,8 +260,8 @@ num_options = 2
 high_agent = HighLevelAgent(input_dim=state_dim, num_options=num_options)
 low_agents = [OptionCriticLowLevelAgent(input_dim=state_dim, action_dim=action_dim) for _ in range(num_options)]
 
-high_optimizer = optim.Adam(high_agent.parameters(), lr=1e-3)
-low_optimizers = [optim.Adam(low_agents[i].parameters(), lr=1e-3) for i in range(num_options)]
+high_optimizer = optim.Adam(high_agent.parameters(), lr=5e-5)
+low_optimizers = [optim.Adam(low_agents[i].parameters(), lr=5e-5) for i in range(num_options)]
 
 mse_loss_fn = nn.MSELoss()
 num_pretrain_epochs = 20
@@ -285,19 +291,13 @@ for epoch in range(num_pretrain_epochs):
 
 # Note: For the high-level agent, since we don't have explicit option labels from demonstrations,
 # we can choose to initialize it randomly and let it learn during the RL phase.
-
-# ===============================
-# 6. (Conceptual) HRL RL Fine-Tuning Loop using Option-Critic
-# ===============================
-# The following is a conceptual outline for RL fine-tuning.
-# You will need to implement the loss computations, advantage estimation, and updates.
 termination_threshold = 0.5  
 num_rl_episodes = 100
 replay_buffer = []
 model_path = "universal_robots_ur5e/scene.xml"
 env = MuJoCoEnv(model_path)
 initial_state = env.reset()
-
+import time
 for episode in range(num_rl_episodes):
     state = env.reset()  # Assuming env is your MuJoCo environment instance
     done = False
@@ -306,12 +306,10 @@ for episode in range(num_rl_episodes):
 
     while not done:
         state_tensor = torch.FloatTensor(state).unsqueeze(0)
-        # High-level decision: choose an option if needed.
         if current_option is None:
             q_values = high_agent(state_tensor)
             current_option = torch.argmax(q_values, dim=1).item()
         
-        # Low-level decision: get action and termination probability.
         low_agent = low_agents[current_option]
         action_tensor, termination_prob_tensor = low_agent(state_tensor)
         action = action_tensor.squeeze(0).detach().numpy()
@@ -327,10 +325,7 @@ for episode in range(num_rl_episodes):
         # Decide whether to terminate the current option.
         if termination_prob > termination_threshold:
             current_option = None  # Signal to choose a new option next time step.
-        
+        time.sleep(1)
         state = next_state
     
     print(f"RL Episode {episode+1}/{num_rl_episodes} complete, Reward: {episode_reward:.2f}")
-
-# Note: The RL update steps for the high-level agent and the termination function, along with the policy gradient updates,
-# need to be implemented based on your chosen RL algorithm (e.g., Option-Critic, PPO, etc.).
