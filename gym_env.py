@@ -96,8 +96,6 @@ class MuJoCoEnv:
             # if((contact.geom1==31 and contact.geom2 == 36) or (contact.geom1 == 31 and contact.geom2==38)):
             #     # print('contacting')
             #     self.contact_made = True[0.57004024 0.46294754 0.42828982 0.52659427]
-            if(self.toggle_state):
-                self.contact_made = True    
                 
             # if (contact.geom1 == 31 and contact.geom2 == 37):
             #     print(f"Contact detected between Geom1: {contact.geom1} and Geom2: {contact.geom2}")
@@ -130,18 +128,14 @@ class MuJoCoEnv:
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
         slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
         
-        # Get EEF position and quaternion
         eef_pos = self.data.xpos[eef_body_id]
         eef_quat = self.data.xquat[eef_body_id]
         
-        # Set position to match EEF
         self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = eef_pos
         
-        # Compute relative rotation from initial slab orientation to EEF orientation
         initial_slab_quat_inv = self.quaternion_inverse(self.initial_slab_quat)
         relative_quat = self.quaternion_multiply(eef_quat, initial_slab_quat_inv)
         
-        # Apply only the relative rotation to the initial slab orientation
         new_slab_quat = self.quaternion_multiply(relative_quat, self.initial_slab_quat)
         self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = new_slab_quat
 

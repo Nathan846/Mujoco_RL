@@ -84,14 +84,11 @@ class MuJoCoEnv:
     def compute_low_level_reward(self, state, action, next_state):
         env = self
         if not env.welded:
-            # Phase 1: Bring end effector close to slab.
-            # Get the end effector (eef) position and the slab position.
             eef_body_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
             slab_body_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, "slab_mocap")
             eef_pos = env.data.xpos[eef_body_id]
             slab_pos = env.data.xpos[slab_body_id]
             distance = np.linalg.norm(eef_pos - slab_pos)
-            # Also penalize large actions (encouraging smooth motion)
             smooth_penalty = 0.1 * np.linalg.norm(action)
             reward = -distance - smooth_penalty
         else:
