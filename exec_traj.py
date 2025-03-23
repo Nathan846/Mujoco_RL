@@ -38,7 +38,10 @@ class ReExecuteTrajectory:
 
     def execute_trajectory(self):
         """Execute the trajectory by iterating through states."""
-        for state in self.trajectory:
+        big_traj = [item for sublist in self.trajectory for item in sublist]
+
+        for state in big_traj:
+            print(state)
             joint_angles = state["joint_angles"]
             slab_position = state["slab_position"]
             slab_orientation = state["slab_orientation"]
@@ -67,7 +70,7 @@ class ReExecuteTrajectory:
 
 if __name__ == "__main__":
     model_path = "universal_robots_ur5e/scene.xml"
-    trajectory_file = "trajectories/traj_rebalanced4.json"
+    trajectory_file = "traj_trace/place_40.json"
 
     executor = ReExecuteTrajectory(model_path, trajectory_file)
     try:

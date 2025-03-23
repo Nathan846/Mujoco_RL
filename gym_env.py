@@ -12,6 +12,7 @@ LOG_FILE = "traj_trace/place_40.json"
 class MuJoCoEnv:
     def __init__(self, model_path):
         self.integration_dt = 1.0
+        self.resolution = 0.05
         self.damping = 1e-4
         self.gravity_compensation = True
         self.dt = 0.00002
@@ -40,8 +41,13 @@ class MuJoCoEnv:
         mujoco.mj_forward(self.model, self.data)
         self.render()
         # self.print_all_geoms()
-        self.logs = [{"init_pos":slab_pos,"init_quat":init_quat}]
-
+        self.logs = {
+            "initial_values": {
+                "init_pos": slab_pos,
+                "init_quat": init_quat
+            },
+            "data": []
+        }
 
     def render(self):
         if(self.welded and not self.contact_made):
@@ -122,7 +128,7 @@ class MuJoCoEnv:
                 }
             }
             log_data.append(log_entry)
-        self.logs.append(log_data)
+        self.logs["data"].append(log_data)
     def update_slab_to_match_eef(self):
         eef_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
@@ -133,10 +139,13 @@ class MuJoCoEnv:
         
         self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx+3] = eef_pos
         
-        initial_slab_quat_inv = self.quaternion_inverse(self.initial_slab_quat)
-        relative_quat = self.quaternion_multiply(eef_quat, initial_slab_quat_inv)
+        if not hasattr(self, 'eef_contact_quat'):
+            self.eef_contact_quat = eef_quat.copy() 
+            self.slab_contact_quat = self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7].copy()
         
-        new_slab_quat = self.quaternion_multiply(relative_quat, self.initial_slab_quat)
+        delta_quat = self.quaternion_multiply(eef_quat, self.quaternion_inverse(self.eef_contact_quat))
+        
+        new_slab_quat = self.quaternion_multiply(delta_quat, self.slab_contact_quat)
         self.data.qpos[slab_qpos_start_idx+3:slab_qpos_start_idx+7] = new_slab_quat
 
         mujoco.mj_forward(self.model, self.data)
@@ -210,7 +219,7 @@ class MuJoCoEnv:
             print(f"Chosen points: {chosen_points}, Distance: {min_dist}")
 
         return chosen_points
-    
+        
     def init_gui(self):
         if not self.gui_initialized:
             self.app = QApplication(sys.argv)
@@ -222,28 +231,37 @@ class MuJoCoEnv:
             self.sliders = []
             self.labels = []
             self.toggle_state = False  
+
+            # Define the resolution for joint angle changes
+            self.resolution = 0.05  # or 0.025 for finer control
+
             for i in range(7):
                 h_layout = QHBoxLayout()
 
-                label = QLabel(f"Joint {i + 1}: 0.0")
+                # Create label with fixed width and monospaced font
+                label = QLabel(f"Jt {i + 1}: 0.00°")
+                label.setFixedWidth(120)  # adjust width as needed for consistency
+                label.setStyleSheet("font-family: Courier;")  # use a monospaced font
                 self.labels.append(label)
                 h_layout.addWidget(label)
 
+                # Set up slider with integer values scaled by resolution
                 slider = QSlider(Qt.Horizontal)
-                slider.setMinimum(-1800)
-                slider.setMaximum(1800)
+                slider.setMinimum(int(-180 / self.resolution))
+                slider.setMaximum(int(180 / self.resolution))
                 slider.setValue(0)
-                slider.valueChanged.connect(lambda value, i=i: self.update_joint_angle(i, value / 10.0))
+                slider.valueChanged.connect(lambda value, i=i: self.update_joint_angle(i, value * self.resolution))
                 self.sliders.append(slider)
-
                 h_layout.addWidget(slider)
 
+                # Decrement button using the resolution
                 decrement_button = QPushButton("-")
-                decrement_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, -0.1))
+                decrement_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, -self.resolution))
                 h_layout.addWidget(decrement_button)
 
+                # Increment button using the resolution
                 increment_button = QPushButton("+")
-                increment_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, 0.1))
+                increment_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, self.resolution))
                 h_layout.addWidget(increment_button)
 
                 layout.addLayout(h_layout)
@@ -259,7 +277,6 @@ class MuJoCoEnv:
 
             self.window.setLayout(layout)
             self.gui_initialized = True
-
     def toggle_button_clicked(self):
         self.toggle_state = self.toggle_button.isChecked()
         if self.toggle_state:
@@ -267,14 +284,21 @@ class MuJoCoEnv:
         else:
             self.toggle_button.setText("Toggle OFF")
 
-    def update_joint_angle(self, index, value):
-        self.labels[index].setText(f"Joint {index + 1}: {value:.1f}")
+    def update_joint_angle(self, joint_index, value):
+        angle_rad = np.radians(value)
+        self.data.qpos[joint_index] = angle_rad
+        mujoco.mj_forward(self.model, self.data)
+        self.render()
+        self.labels[joint_index].setText(f"Jt {joint_index + 1}: {value:.2f}°")
 
     def adjust_joint_angle(self, index, increment):
-        current_value = self.sliders[index].value() / 10.0 
+        # Convert the slider's integer value back to degrees using resolution.
+        current_value = self.sliders[index].value() * self.resolution
         new_value = current_value + increment
-        new_value = max(-180.0, min(180.0, new_value))  
-        self.sliders[index].setValue(int(new_value * 10))
+        new_value = max(-180.0, min(180.0, new_value))
+        # Set the slider value back as an integer by dividing by resolution.
+        self.sliders[index].setValue(int(new_value / self.resolution))
+
     def write_logs(self, filename="cf_log.json"):
             with open(filename, "w") as file:
                 json.dump(self.logs, file, indent=4)
@@ -302,7 +326,7 @@ class MuJoCoEnv:
         self.data.qpos[joint_index] = angle_rad
         mujoco.mj_forward(self.model, self.data)
         self.render()
-        self.labels[joint_index].setText(f"Joint {joint_index + 1}: {value}°")
+        self.labels[joint_index].setText(f"Jt {joint_index + 1}: {value}°")
 
     def close_application(self):
         print("Closing application...")
