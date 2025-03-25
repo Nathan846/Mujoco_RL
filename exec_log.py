@@ -1,3 +1,6 @@
+"""
+Redundant trajectory processing file
+"""
 import json
 import numpy as np
 import mujoco
@@ -6,7 +9,6 @@ import time
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize
 import sys
-# ==================== Trajectory Processing Functions ==================== #
 def load_json(file_path):
     with open(file_path, "r") as file:
         return json.load(file)
