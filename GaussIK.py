@@ -1,4 +1,6 @@
-
+"""
+Gauss IK solver, currently redundant
+"""
 import numpy as np
 import time
 import mujoco
