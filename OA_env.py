@@ -107,10 +107,10 @@ class OA_env(gym.Env):
         #     inp = torch.FloatTensor(stack).unsqueeze(0).to(self.device)
         #     eef_out = self.fk_model(inp).squeeze(0).cpu().numpy()
 
-        eef_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")        
-        eef_pos = self.data.xpos[eef_body_id]
-        eef_quat = self.data.xquat[eef_body_id]
-        eef_out = eef_pos + eef_quat
+        eef_body_id = mujoco.mj_name2id(self.mjc_env.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")        
+        eef_pos = self.mjc_env.data.xpos[eef_body_id]
+        eef_quat = self.mjc_env.data.xquat[eef_body_id]
+        eef_out = np.concatenate((eef_pos, eef_quat), axis=0) 
         base_obs = np.concatenate([qpos_robot, slab_pose, eef_out])
 
         contacts_info = self._get_contact_details()
@@ -159,6 +159,7 @@ class OA_env(gym.Env):
         contact_obs_arr = np.array(contact_obs, dtype=np.float32)
 
         obs = np.concatenate([base_obs, contact_obs_arr]).astype(np.float32)
+        print(obs.shape)
         return obs
 
     def _compute_reward(self, obs):
@@ -238,9 +239,8 @@ class OA_env(gym.Env):
                 self.done = True
                 if (count_pairs_34 > 0) and (count_pairs_36 > 0) and (big_force_count == 0) and (undesired_contacts == 0):
                     reward += 10.0
-
-
         return reward
+
     def _check_done(self, obs):
         if self.done or self.steps>=self.max_episode_steps:
             return True

@@ -232,20 +232,17 @@ class MuJoCoEnv:
             self.labels = []
             self.toggle_state = False  
 
-            # Define the resolution for joint angle changes
             self.resolution = 0.05  # or 0.025 for finer control
 
             for i in range(7):
                 h_layout = QHBoxLayout()
 
-                # Create label with fixed width and monospaced font
                 label = QLabel(f"Jt {i + 1}: 0.00°")
-                label.setFixedWidth(120)  # adjust width as needed for consistency
-                label.setStyleSheet("font-family: Courier;")  # use a monospaced font
+                label.setFixedWidth(120)  
+                label.setStyleSheet("font-family: Courier;") 
                 self.labels.append(label)
                 h_layout.addWidget(label)
 
-                # Set up slider with integer values scaled by resolution
                 slider = QSlider(Qt.Horizontal)
                 slider.setMinimum(int(-180 / self.resolution))
                 slider.setMaximum(int(180 / self.resolution))
@@ -254,12 +251,10 @@ class MuJoCoEnv:
                 self.sliders.append(slider)
                 h_layout.addWidget(slider)
 
-                # Decrement button using the resolution
                 decrement_button = QPushButton("-")
                 decrement_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, -self.resolution))
                 h_layout.addWidget(decrement_button)
 
-                # Increment button using the resolution
                 increment_button = QPushButton("+")
                 increment_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, self.resolution))
                 h_layout.addWidget(increment_button)
