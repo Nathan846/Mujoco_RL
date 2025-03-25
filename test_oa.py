@@ -1,11 +1,11 @@
+"""
+Env test environment
+"""
 import numpy as np
 import time
-from OA_env import OA_env  # or whatever your environment file is named
-
+from OA_env import OA_env
 def test_random_actions(num_episodes=2, max_steps=50):
-    # Initialize the environment
-    env = OA_env()  # or pass any constructor args needed
-    
+    env = OA_env()    
     for ep in range(num_episodes):
         obs = env.reset()
         done = False

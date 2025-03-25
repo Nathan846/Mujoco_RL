@@ -1,3 +1,5 @@
+"""Measures RMSE distance between Trajectories
+"""
 import numpy as np
 import json
 import os

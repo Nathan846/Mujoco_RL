@@ -1,3 +1,6 @@
+"""
+Executes trajectories generated. Change trajectory path to point to the trajectory json file
+"""
 import mujoco
 import mujoco_viewer
 import time

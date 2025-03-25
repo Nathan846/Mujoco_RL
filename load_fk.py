@@ -1,4 +1,6 @@
-# fk_nn.py
+"""
+Forward kinematics solver, currently redundant
+"""
 import torch
 import torch.nn as nn
 

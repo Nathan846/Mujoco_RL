@@ -1,3 +1,6 @@
+"""
+MAIN File for training the HRL Based DQN model
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,15 +10,15 @@ import random
 from OA_env import OA_env
 
 class HierarchicalDQN(nn.Module):
-    def __init__(self, in_features, num_actions, hidden_dim=128):
+    def __init__(self, in_features, num_actions, hidden_dim=128, device='cpu'):
         super(HierarchicalDQN, self).__init__()
         self.in_features = in_features
         self.num_actions = num_actions
+        self.device = device
         self.shared_fc = nn.Sequential(
             nn.Linear(in_features, hidden_dim),
             nn.ReLU()
         )
-        self.device = 'cpu'
         self.switch_fc = nn.Linear(hidden_dim, 2)
         self.q_head1 = nn.Linear(hidden_dim, num_actions)
         self.q_head2 = nn.Linear(hidden_dim, num_actions)
@@ -90,8 +93,8 @@ def main():
     epsilon_start = 1.0
     epsilon_final = 0.05
     epsilon_decay = 500
-    agent = HierarchicalDQN(state_dim, num_actions, hidden_dim).to(device)
-    target_agent = HierarchicalDQN(state_dim, num_actions, hidden_dim).to(device)
+    agent = HierarchicalDQN(state_dim, num_actions, hidden_dim, device=device).to(device)
+    target_agent = HierarchicalDQN(state_dim, num_actions, hidden_dim, device=device).to(device)
     target_agent.load_state_dict(agent.state_dict())
     optimizer = optim.Adam(agent.parameters(), lr=1e-3)
     replay_buffer = ReplayBuffer(replay_capacity)
@@ -118,6 +121,6 @@ def main():
         if episode % update_target_freq == 0:
             target_agent.load_state_dict(agent.state_dict())
         print(f"Episode: {episode}, Reward: {ep_reward}, Epsilon: {epsilon:.3f}, Loss: {loss if loss is not None else 'N/A'}")
-        
+
 if __name__ == "__main__":
     main()

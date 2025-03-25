@@ -1,3 +1,6 @@
+"""
+Defining env here, includi9ng reward functions, observation actions spaces etc
+"""
 import gym
 import numpy as np
 from gym import spaces
@@ -271,4 +274,5 @@ class OA_env(gym.Env):
         return contacts_info
 
     def render(self, mode='human'):
-        self.mjc_env.render()
+        pass
+        # self.mjc_env.render()

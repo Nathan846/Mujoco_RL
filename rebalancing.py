@@ -1,3 +1,6 @@
+"""
+Smoothens, and rebalances the original trajectory files for training
+"""
 import json
 import numpy as np
 import time

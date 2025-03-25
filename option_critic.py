@@ -1,4 +1,6 @@
-# option_critic.py
+"""
+Redudant option critic architecture. Attached only for reference.
+"""
 import torch
 import torch.nn as nn
 import torch.optim as optim
