@@ -7,7 +7,7 @@ from gym import spaces
 import torch
 import mujoco
 from load_fk import FKNN
-from gym_env import MuJoCoEnv
+from mujoco_env import MuJoCoEnv
 
 class OA_env(gym.Env):
     def __init__(
@@ -26,8 +26,8 @@ class OA_env(gym.Env):
         self.done = False
         self.mjc_env = MuJoCoEnv(self.model_path)
         self.fk_model = FKNN().to(self.device)
-        if fk_weights_path is not None:
-            self.fk_model.load_state_dict(torch.load(fk_weights_path, map_location=device))
+        # if fk_weights_path is not None:
+            # self.fk_model.load_state_dict(torch.load(fk_weights_path, map_location=device))
         self.fk_model.eval()
 
         # structure:
@@ -56,36 +56,45 @@ class OA_env(gym.Env):
 
     def reset(self):
         
-        # Re-instantiate or define a dedicated reset in MuJoCoEnv
-        self.mjc_env.__init__(self.model_path)
+        self.initial_slab_quat = np.array([1, 0, 0, 0])
+        slab_joint_id = mujoco.mj_name2id(self.mjc_env.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
+        slab_qpos_start_idx = self.mjc_env.model.jnt_qposadr[slab_joint_id]
+        slab_pos = [1.5, 0.5, 0.01]
+
+        self.mjc_env.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx + 3] = slab_pos
+        init_quat = [1]
+        self.mjc_env.data.qpos[slab_qpos_start_idx + 3:slab_qpos_start_idx + 7] = [1,0,0,0]
+        self.mjc_env.data.qvel[8:11] = [0, 0, 0]
+        mujoco.mj_forward(self.mjc_env.model, self.mjc_env.data)
+
         self.steps = 0
         self.current_phase = 0
         return self._compute_observation()
 
     def step(self, action):
         self.steps += 1
+        if action is None:
+            obs = self._compute_observation()
+            reward = self._compute_reward(obs)
+            done = self._check_done(obs)
+            return obs, reward, done, {}
 
-        # Example discrete action interpretation:
-        #   Even index => increment a joint
-        #   Odd index  => decrement a joint
-        #   joint_idx  = action // 2
-        if action % 2 == 0:
-            joint_idx = action // 2
-            delta = 0.02
-        else:
-            joint_idx = action // 2
-            delta = -0.02
+        joint_idx = action // 2
+        direction = 1 if action % 2 == 0 else -1
+
+        base_delta = 0.0004363326388885369
+        delta = np.radians(0.025)*2 if joint_idx == 2 else base_delta
+        delta *= direction
 
         current_qpos = self.mjc_env.data.qpos[joint_idx]
         self.mjc_env.data.qpos[joint_idx] = current_qpos + delta
 
-        self.mjc_env.log_contact_forces()
-        
+        mujoco.mj_forward(self.mjc_env.model, self.mjc_env.data)
         obs = self._compute_observation()
         reward = self._compute_reward(obs)
         done = self._check_done(obs)
         info = {}
-
+        self.render()
         return obs, reward, done, info
 
     def _compute_observation(self):
@@ -162,27 +171,30 @@ class OA_env(gym.Env):
         contact_obs_arr = np.array(contact_obs, dtype=np.float32)
 
         obs = np.concatenate([base_obs, contact_obs_arr]).astype(np.float32)
-        print(obs.shape)
         return obs
 
     def _compute_reward(self, obs):
-        """
-        Two-phase reward that includes:
-        - Phase 0: distance-based shaping for approaching slab + correct contact (geom30 <-> geom31)
-        - Phase 1: distance-based shaping to stand + specific 2-contact-per-geom 
-        """
         reward = 0.0
 
         eef_x, eef_y, eef_z = obs[14], obs[15], obs[16]
 
         slab_x, slab_y, slab_z = obs[7], obs[8], obs[9]
+        eef_quat = obs[17:21]
+        slab_quat = obs[10:14]
 
         stand_x, stand_y = 2.0, 1.0
 
         contacts = self._get_contact_details()
+
         if self.current_phase == 0:
             dist_eef_slab = np.sqrt((eef_x - slab_x)**2 + (eef_y - slab_y)**2 + (eef_z - slab_z)**2)
             reward -= dist_eef_slab
+
+            dot_product = np.clip(np.dot(eef_quat, slab_quat), -1.0, 1.0)
+            angle_diff = 2 * np.arccos(abs(dot_product))
+            reward -= 5.0 * angle_diff
+
+            # Contact check
             eef_slab_contact = False
             undesired_contacts = 0
             for c in contacts:
@@ -237,27 +249,37 @@ class OA_env(gym.Env):
 
             reward += 3.0 * count_pairs_34
             reward += 3.0 * count_pairs_36
-
             if len(positions_34) >= 2 and len(positions_36) >= 2:
                 self.done = True
                 if (count_pairs_34 > 0) and (count_pairs_36 > 0) and (big_force_count == 0) and (undesired_contacts == 0):
                     reward += 10.0
         return reward
+    def _count_pairs_with_y_spacing(self, positions, target_spacing=0.5, tol=0.05):
+        """
+        Counts how many distinct pairs of positions differ in their y-coordinate
+        by approximately 'target_spacing' (within ± tol).
+        
+        :param positions: A list of 3D positions (each a 1D array [x, y, z]).
+        :param target_spacing: The desired difference in y-coordinates.
+        :param tol: The allowed tolerance above/below target_spacing.
+        :return: The number of pairs that meet this criterion.
+        """
+        count = 0
+        n = len(positions)
+        for i in range(n):
+            for j in range(i+1, n):
+                y_i = positions[i][1]
+                y_j = positions[j][1]
+                spacing = abs(y_i - y_j)
+                if abs(spacing - target_spacing) <= tol:
+                    count += 1
+        return count
 
     def _check_done(self, obs):
         if self.done or self.steps>=self.max_episode_steps:
             return True
         return False
     def _get_contact_details(self):
-        """
-        Returns a list of dictionaries, each describing one contact:
-        {
-            "geom1": <int>,
-            "geom2": <int>,
-            "force": np.array(6),  # the 6D contact force
-            "pos": np.array(3),    # contact position in world coords
-        }
-        """
         contacts_info = []
         for i in range(self.mjc_env.data.ncon):
             c = self.mjc_env.data.contact[i]
@@ -274,5 +296,4 @@ class OA_env(gym.Env):
         return contacts_info
 
     def render(self, mode='human'):
-        pass
-        # self.mjc_env.render()
+        self.mjc_env.render()

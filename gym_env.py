@@ -11,7 +11,7 @@ import json
 import time
 from threading import Thread
 from scipy.spatial.transform import Rotation as R
-LOG_FILE = "traj_trace/place_40.json"
+LOG_FILE = "place_401.json"
 class MuJoCoEnv:
     def __init__(self, model_path):
         self.integration_dt = 1.0
@@ -21,6 +21,8 @@ class MuJoCoEnv:
         self.dt = 0.00002
         self.contact_made = False
         self.welded = False 
+        self.num_bins = 28800
+        self.phase = 0
         self.max_angvel = 1.0
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
@@ -36,6 +38,10 @@ class MuJoCoEnv:
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
         slab_qpos_start_idx = self.model.jnt_qposadr[slab_joint_id]
         slab_pos = [1.5, 0.5, 0.01]
+        self.last_logged_joint_angles = [0]*8
+        for i in range(7):
+            self.data.qpos[i] = 0.0
+
 
         self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx + 3] = slab_pos
         init_quat = [1]
@@ -43,7 +49,6 @@ class MuJoCoEnv:
         self.data.qvel[8:11] = [0, 0, 0]
         mujoco.mj_forward(self.model, self.data)
         self.render()
-        # self.print_all_geoms()
         self.logs = {
             "initial_values": {
                 "init_pos": slab_pos,
@@ -51,7 +56,15 @@ class MuJoCoEnv:
             },
             "data": []
         }
-
+        self.logging_threshold_degs = np.radians(0.025)
+    def get_discrete_angle_values(self, joint_index):
+        step = np.radians(0.025)
+        low, high = self.model.jnt_range[joint_index]
+        num_bins = int((high - low) / step) + 1
+        print(num_bins)
+        
+        return np.linspace(low, high, num_bins)
+        
     def render(self):
         if(self.welded and not self.contact_made):
             self.update_slab_to_match_eef()
@@ -77,61 +90,68 @@ class MuJoCoEnv:
             print(f"  Size: {geom_size}")
             print(f"  Position: {geom_pos}")
             print(f"  Orientation (Quat): {geom_quat}")
-
     def log_contact_forces(self):
-        duplicate_count = sum(
-            1 for i in range(self.data.ncon) 
-            if (self.data.contact[i].geom1 == 31 and self.data.contact[i].geom2 == 36) or
-            (self.data.contact[i].geom1 == 36 and self.data.contact[i].geom2 == 31)
-        )
-        log_data = []
-        joint_angles = self.data.qpos[:7].tolist()
-        vel = self.data.qvel.tolist()
+        joint_angles = []
+        for i in range(7):
+            discrete_vals = self.get_discrete_angle_values(i)
+            current_angle = self.data.qpos[i]
+            nearest_val = min(discrete_vals, key=lambda x: abs(x - current_angle))
+            joint_angles.append(nearest_val)
+
         slab_pos = self.data.qpos[7:10].tolist()
         slab_quat = self.data.qpos[10:14].tolist()
-        joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
-        qpos_start_idx = self.model.jnt_qposadr[joint_id]
-        
-        for i in range(self.data.ncon):
-            contact = self.data.contact[i]
-            # print(contact)
-            # print(contact.pos)
-            contact_force = np.zeros(6)
-            mujoco.mj_contactForce(self.model, self.data, i, contact_force)
-            if contact.geom1 == 30 and contact.geom2 == 31:
-                if not self.welded and not self.contact_made:
-                    self.welded = True
-                continue    
-            # if((contact.geom1==31 and contact.geom2 == 36) or (contact.geom1 == 31 and contact.geom2==38)):
-            #     # print('contacting')
-            #     self.contact_made = True[0.57004024 0.46294754 0.42828982 0.52659427]
-                
-            # if (contact.geom1 == 31 and contact.geom2 == 37):
-            #     print(f"Contact detected between Geom1: {contact.geom1} and Geom2: {contact.geom2}")
-            #     if self.welded and not self.contact_made:
-            #         self.welded = False
-            #         self.contact_made = True
-            #         print("Contact made, switching to decoupled rendering.")
-            contact_force_list = contact_force.tolist()
 
-            log_entry = {
-                "timestamp": time.time(),
-                "joint_angles": joint_angles,
-                "slab_position": slab_pos,
-                "slab_orientation": slab_quat,
-                "contact": {
+        if self.last_logged_joint_angles is None:
+            old_degs = np.zeros(7)
+        else:
+            old_degs = np.degrees(self.last_logged_joint_angles)
+        new_degs = np.degrees(joint_angles)
+        max_diff = max(abs(a - b) for a, b in zip(new_degs, old_degs))
+
+        # Decide whether to log
+        should_log = (
+            self.last_logged_joint_angles is None
+            or max_diff > self.logging_threshold_degs
+        )
+
+        if should_log:
+            contact_entries = []
+            for i in range(self.data.ncon):
+                contact = self.data.contact[i]
+                contact_force = np.zeros(6)
+                mujoco.mj_contactForce(self.model, self.data, i, contact_force)
+
+                if contact.geom1 == 30 and contact.geom2 == 31:
+                    if not self.welded and not self.contact_made:
+                        self.welded = True
+                    continue
+
+                contact_entries.append({
                     "geom1": contact.geom1,
                     "geom2": contact.geom2,
                     "forces": {
                         "normal_force": contact_force[0],
                         "tangential_force_x": contact_force[1],
                         "tangential_force_y": contact_force[2],
-                        "full_contact_force": contact_force_list
+                        "full_contact_force": contact_force.tolist()
                     }
-                }
+                })
+            if(self.welded):
+                self.phase = 1
+            log_entry = {
+                "timestamp": time.time(),
+                "joint_angles": joint_angles,
+                "prev_angles": list(self.last_logged_joint_angles),
+                "slab_position": slab_pos,
+                "slab_orientation": slab_quat,
+                "phase": self.phase,
+                "max_diff": round(max_diff, 8),
+                "contacts": contact_entries
             }
-            log_data.append(log_entry)
-        self.logs["data"].append(log_data)
+
+            self.logs["data"].append(log_entry)
+            self.last_logged_joint_angles = np.array(joint_angles)
+
     def update_slab_to_match_eef(self):
         eef_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "4boxes")
         slab_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_mocap")
@@ -235,7 +255,7 @@ class MuJoCoEnv:
             self.labels = []
             self.toggle_state = False  
 
-            self.resolution = 0.05  # or 0.025 for finer control
+            self.resolution = 0.05 
 
             for i in range(7):
                 h_layout = QHBoxLayout()
@@ -246,20 +266,23 @@ class MuJoCoEnv:
                 self.labels.append(label)
                 h_layout.addWidget(label)
 
+                discrete_vals = self.get_discrete_angle_values(i)
+                num_bins = len(discrete_vals)
+
                 slider = QSlider(Qt.Horizontal)
-                slider.setMinimum(int(-180 / self.resolution))
-                slider.setMaximum(int(180 / self.resolution))
-                slider.setValue(0)
-                slider.valueChanged.connect(lambda value, i=i: self.update_joint_angle(i, value * self.resolution))
+                slider.setMinimum(0)
+                slider.setMaximum(num_bins - 1)
+                slider.setValue(num_bins // 2)
+                slider.valueChanged.connect(lambda value, i=i: self.set_discrete_joint_value(i, value))
                 self.sliders.append(slider)
                 h_layout.addWidget(slider)
 
                 decrement_button = QPushButton("-")
-                decrement_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, -self.resolution))
+                decrement_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, -1))
                 h_layout.addWidget(decrement_button)
 
                 increment_button = QPushButton("+")
-                increment_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, self.resolution))
+                increment_button.clicked.connect(lambda _, i=i: self.adjust_joint_angle(i, 1))
                 h_layout.addWidget(increment_button)
 
                 layout.addLayout(h_layout)
@@ -281,6 +304,20 @@ class MuJoCoEnv:
             self.toggle_button.setText("Toggle ON")
         else:
             self.toggle_button.setText("Toggle OFF")
+    def set_discrete_joint_value(self, joint_index, bin_index):
+        discrete_vals = self.get_discrete_angle_values(joint_index)
+        angle = discrete_vals[bin_index]
+        self.data.qpos[joint_index] = angle
+        mujoco.mj_forward(self.model, self.data)
+        self.render()
+        angle_deg = np.degrees(angle)
+        self.labels[joint_index].setText(f"Jt {joint_index + 1}: {angle_deg:.2f}°")
+
+    def adjust_joint_angle(self, index, step):
+        current_bin = self.sliders[index].value()
+        new_bin = max(0, min(self.num_bins - 1, current_bin + step))
+        self.sliders[index].setValue(new_bin)
+        self.set_discrete_joint_value(index, new_bin)
 
     def update_joint_angle(self, joint_index, value):
         angle_rad = np.radians(value)
@@ -289,16 +326,10 @@ class MuJoCoEnv:
         self.render()
         self.labels[joint_index].setText(f"Jt {joint_index + 1}: {value:.2f}°")
 
-    def adjust_joint_angle(self, index, increment):
-        # Convert the slider's integer value back to degrees using resolution.
-        current_value = self.sliders[index].value() * self.resolution
-        new_value = current_value + increment
-        new_value = max(-180.0, min(180.0, new_value))
-        # Set the slider value back as an integer by dividing by resolution.
-        self.sliders[index].setValue(int(new_value / self.resolution))
 
     def write_logs(self, filename="cf_log.json"):
             with open(filename, "w") as file:
+                print(self.logs)
                 json.dump(self.logs, file, indent=4)
             print(f"Logs saved to {filename}")
     def disable_gui(self):
