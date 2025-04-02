@@ -7,8 +7,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import random
+import os
 from OA_env import OA_env
-
+from torch.utils.data import DataLoader
+from data_loader import ExpertTensorDataset
+# === Model ===
 class HierarchicalDQN(nn.Module):
     def __init__(self, in_features, num_actions, hidden_dim=128, device='cpu'):
         super(HierarchicalDQN, self).__init__()
@@ -36,6 +39,7 @@ class HierarchicalDQN(nn.Module):
             final_q = switch_probs[:, 0].unsqueeze(-1) * q1 + switch_probs[:, 1].unsqueeze(-1) * q2
         return final_q, switch_probs, q1, q2
 
+# === Replay Buffer ===
 class ReplayBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -57,6 +61,7 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
+# === Training Step ===
 def train_dqn(agent, target_agent, replay_buffer, batch_size, optimizer, gamma=0.99):
     if len(replay_buffer) < batch_size:
         return None
@@ -79,9 +84,10 @@ def train_dqn(agent, target_agent, replay_buffer, batch_size, optimizer, gamma=0
     optimizer.step()
     return loss.item()
 
+# === MAIN ===
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = OA_env(device=str(device))
+    env = OA_env(device=str(device),render=False)
     state_dim = env.obs_dim
     num_actions = env.action_space.n
     hidden_dim = 128
@@ -93,11 +99,48 @@ def main():
     epsilon_start = 1.0
     epsilon_final = 0.05
     epsilon_decay = 500
+
     agent = HierarchicalDQN(state_dim, num_actions, hidden_dim, device=device).to(device)
     target_agent = HierarchicalDQN(state_dim, num_actions, hidden_dim, device=device).to(device)
     target_agent.load_state_dict(agent.state_dict())
     optimizer = optim.Adam(agent.parameters(), lr=1e-3)
     replay_buffer = ReplayBuffer(replay_capacity)
+
+    print("📦 Loading expert dataset...")
+    expert_folder = "processed_trajs/"
+    dataset = ExpertTensorDataset("expert_data.pt")
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    print(len(dataloader))
+    print("🔧 Pretraining on expert transitions...")
+    pretrain_epochs = 10
+    for epoch in range(pretrain_epochs):
+        total_loss = 0.0
+        batch_count = 0
+        for state, action, reward, next_state, done in dataloader:
+            state = state.to(device)
+            action = action.squeeze(1).to(device)
+            reward = reward.squeeze(1).to(device)
+            next_state = next_state.to(device)
+            done = done.squeeze(1).to(device)
+            batch_count += 1
+            q_values, _, _, _ = agent(state, use_hard_switch=False)
+            current_q = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
+            with torch.no_grad():
+                next_q, _, _, _ = target_agent(next_state, use_hard_switch=False)
+                max_next_q = next_q.max(1)[0]
+                target_q = reward + (1 - done) * gamma * max_next_q
+            loss = F.mse_loss(current_q, target_q)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            if (batch_count + 1) % 10 == 0 or (batch_count + 1) == len(dataloader):
+                print(f"   → Processed {batch_count+1}/{len(dataloader)} batches...")
+
+        avg_loss = total_loss / max(1, len(dataloader))
+        print(f"🧠 Pretrain Epoch {epoch + 1}/{pretrain_epochs} | Avg Loss: {avg_loss:.4f}")
+
+    print("🎮 Starting online training...")
     epsilon = epsilon_start
     total_steps = 0
     for episode in range(num_episodes):
@@ -109,18 +152,22 @@ def main():
             if random.random() < epsilon:
                 action = random.randrange(num_actions)
             else:
-                q_values, switch_probs, _, _ = agent(state_tensor, use_hard_switch=True)
+                q_values, _, _, _ = agent(state_tensor, use_hard_switch=True)
                 action = q_values.argmax(dim=-1).item()
+
             next_obs, reward, done, info = env.step(action)
             ep_reward += reward
             replay_buffer.push(obs, action, reward, next_obs, done)
             obs = next_obs
+
             total_steps += 1
             epsilon = max(epsilon_final, epsilon_start - total_steps / epsilon_decay)
             loss = train_dqn(agent, target_agent, replay_buffer, batch_size, optimizer, gamma)
+
         if episode % update_target_freq == 0:
             target_agent.load_state_dict(agent.state_dict())
-        print(f"Episode: {episode}, Reward: {ep_reward}, Epsilon: {epsilon:.3f}, Loss: {loss if loss is not None else 'N/A'}")
+
+        print(f"🏁 Episode {episode} | Reward: {ep_reward:.2f} | Epsilon: {epsilon:.3f} | Loss: {loss if loss is not None else 'N/A'}")
 
 if __name__ == "__main__":
     main()

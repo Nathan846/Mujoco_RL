@@ -11,7 +11,7 @@ import json
 import time
 from threading import Thread
 from scipy.spatial.transform import Rotation as R
-LOG_FILE = "place_401.json"
+LOG_FILE = "place_test.json"
 class MuJoCoEnv:
     def __init__(self, model_path):
         self.integration_dt = 1.0
@@ -42,7 +42,7 @@ class MuJoCoEnv:
         for i in range(7):
             self.data.qpos[i] = 0.0
 
-
+        self.print_all_geoms()
         self.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx + 3] = slab_pos
         init_quat = [1]
         self.data.qpos[slab_qpos_start_idx + 3:slab_qpos_start_idx + 7] = [1,0,0,0]
@@ -61,7 +61,6 @@ class MuJoCoEnv:
         step = np.radians(0.025)
         low, high = self.model.jnt_range[joint_index]
         num_bins = int((high - low) / step) + 1
-        print(num_bins)
         
         return np.linspace(low, high, num_bins)
         
@@ -108,7 +107,6 @@ class MuJoCoEnv:
         new_degs = np.degrees(joint_angles)
         max_diff = max(abs(a - b) for a, b in zip(new_degs, old_degs))
 
-        # Decide whether to log
         should_log = (
             self.last_logged_joint_angles is None
             or max_diff > self.logging_threshold_degs

@@ -13,10 +13,11 @@ class OA_env(gym.Env):
     def __init__(
         self,
         model_path="universal_robots_ur5e/scene.xml",
-        max_episode_steps=200,
+        max_episode_steps=50000,
         phase_reward_weights=None,
         fk_weights_path="fk_nn_model.pth",
-        device="cpu"
+        device="cpu",
+        render = True
     ):
         super(OA_env, self).__init__()
         self.model_path = model_path
@@ -24,6 +25,7 @@ class OA_env(gym.Env):
         self.phase_reward_weights = phase_reward_weights or {"pickup": 1.0, "place": 1.0}
         self.device = device
         self.done = False
+        self.render_var = True
         self.mjc_env = MuJoCoEnv(self.model_path)
         self.fk_model = FKNN().to(self.device)
         # if fk_weights_path is not None:
@@ -60,13 +62,15 @@ class OA_env(gym.Env):
         slab_joint_id = mujoco.mj_name2id(self.mjc_env.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
         slab_qpos_start_idx = self.mjc_env.model.jnt_qposadr[slab_joint_id]
         slab_pos = [1.5, 0.5, 0.01]
-
+        self.mjc_env.welded = False
         self.mjc_env.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx + 3] = slab_pos
         init_quat = [1]
         self.mjc_env.data.qpos[slab_qpos_start_idx + 3:slab_qpos_start_idx + 7] = [1,0,0,0]
-        self.mjc_env.data.qvel[8:11] = [0, 0, 0]
+        self.mjc_env.data.qvel[:] = 0.0
         mujoco.mj_forward(self.mjc_env.model, self.mjc_env.data)
-
+        for i in range(7):
+            self.mjc_env.data.qpos[i] = 0.0
+        self.done = False
         self.steps = 0
         self.current_phase = 0
         return self._compute_observation()
@@ -78,7 +82,6 @@ class OA_env(gym.Env):
             reward = self._compute_reward(obs)
             done = self._check_done(obs)
             return obs, reward, done, {}
-
         joint_idx = action // 2
         direction = 1 if action % 2 == 0 else -1
 
@@ -94,7 +97,7 @@ class OA_env(gym.Env):
         reward = self._compute_reward(obs)
         done = self._check_done(obs)
         info = {}
-        self.render()
+        # self.render()
         return obs, reward, done, info
 
     def _compute_observation(self):
@@ -112,7 +115,6 @@ class OA_env(gym.Env):
         slab_joint_id = mujoco.mj_name2id(self.mjc_env.model, mujoco.mjtObj.mjOBJ_JOINT, "slab_free")
         slab_qpos_start_idx = self.mjc_env.model.jnt_qposadr[slab_joint_id]
         slab_pose = self.mjc_env.data.qpos[slab_qpos_start_idx:slab_qpos_start_idx + 7]
-        # Input to the FK
         # with torch.no_grad():
         #     qpos_robot_ip = qpos_robot[:6]
         #     stack = np.hstack([np.sin(qpos_robot_ip), np.cos(qpos_robot_ip)])
@@ -123,6 +125,8 @@ class OA_env(gym.Env):
         eef_pos = self.mjc_env.data.xpos[eef_body_id]
         eef_quat = self.mjc_env.data.xquat[eef_body_id]
         eef_out = np.concatenate((eef_pos, eef_quat), axis=0) 
+        self.eef_out = eef_out
+        self.slab_pose = slab_pose
         base_obs = np.concatenate([qpos_robot, slab_pose, eef_out])
 
         contacts_info = self._get_contact_details()
@@ -177,12 +181,11 @@ class OA_env(gym.Env):
         reward = 0.0
 
         eef_x, eef_y, eef_z = obs[14], obs[15], obs[16]
-
         slab_x, slab_y, slab_z = obs[7], obs[8], obs[9]
         eef_quat = obs[17:21]
         slab_quat = obs[10:14]
-
-        stand_x, stand_y = 2.0, 1.0
+        slab_quat[3] = -0.5
+        
 
         contacts = self._get_contact_details()
 
@@ -202,68 +205,105 @@ class OA_env(gym.Env):
                 if {g1, g2} == {30, 31}:
                     eef_slab_contact = True
                 else:
+                    if({g1,g2} == {0,31} or {g1,g2}=={27,30}):
+                        continue
+                    if(g1==0 or (g1==27 and g2==30)):
+                        continue
                     undesired_contacts += 1
-
             reward -= 5.0 * undesired_contacts
 
             if eef_slab_contact or dist_eef_slab < 0.05:
                 reward += 10.0
                 self.current_phase = 1
-
         else:
-            dist_slab_stand = np.sqrt((slab_x - stand_x)**2 + (slab_y - stand_y)**2)
-            reward -= dist_slab_stand
+            reward = 0
+            ideal_eef_pos = np.array([-0.11150263, -0.133614, 0.3382516])
+            ideal_eef_quat = np.array([0.89702304, 0.09909241, 0.37242599, 0.21640066])
 
-            positions_34 = []
-            positions_36 = []
-            big_force_count = 0
-            undesired_contacts = 0
+            eef_pos = np.array([eef_x, eef_y, eef_z])
+            eef_quat = eef_quat / np.linalg.norm(eef_quat + 1e-8)
+            pos_dist = np.linalg.norm(eef_pos - ideal_eef_pos)
+            pos_reward = (1.5 - pos_dist) * 5.0
+            reward += pos_reward
             
+            quat_dot = np.clip(np.dot(eef_quat, ideal_eef_quat), -1.0, 1.0)
+            angle_diff = 2 * np.arccos(abs(quat_dot))
+            quat_reward = (1.0 - angle_diff) *5
+            reward += quat_reward
+
+            # print(f"EEF-ideal dist: {pos_dist:.3f}, angle_diff: {angle_diff:.3f} → pos_r: {pos_reward:.2f}, quat_r: {quat_reward:.2f}")
+            positions_36 = []
+            positions_39 = []
+            forces_36 = []
+            forces_39 = []
+            undesired_contacts = 0
+
             for c in contacts:
                 g1, g2 = c["geom1"], c["geom2"]
                 force_6d = c["force"]
-                pos_3d = c["pos"]    
+                pos_3d = c["pos"]
                 force_mag = np.linalg.norm(force_6d)
 
-                if {g1, g2} == {30, 34}:
-                    positions_34.append(pos_3d)
-                    if force_mag > 50.0:
-                        big_force_count += 1
-                elif {g1, g2} == {30, 36}:
+                if {g1, g2} == {31, 36}:
                     positions_36.append(pos_3d)
-                    if force_mag > 50.0:
-                        big_force_count += 1
+                    forces_36.append(force_mag)
+
+                elif {g1, g2} == {31, 39}:
+                    positions_39.append(pos_3d)
+                    forces_39.append(force_mag)
+
+                # Allow other specified contacts
+                elif {g1, g2} in [{27, 30}, {30, 31}]:
+                    continue
+                elif {g1,g2} == {30,37}:
+                    continue
                 else:
+                    if(g1==30 and g2==37):
+                        continue
                     undesired_contacts += 1
-                    if force_mag > 50.0:
-                        big_force_count += 1
+                    if force_mag > 60.0:
+                        reward -= 5.0  # Heavily penalize high-magnitude undesired contacts
+                    else:
+                        reward -= 2.0
+            
+            reward -= 5.0 * undesired_contacts  # General penalty for undesired contacts
 
-            reward -= 5.0 * undesired_contacts
-
-            reward -= 2.0 * big_force_count
-
-            reward += min(len(positions_34), 2) * 1.0
+            # --- Positional Reward ---
             reward += min(len(positions_36), 2) * 1.0
-            count_pairs_34 = self._count_pairs_with_y_spacing(positions_34, target_spacing=0.5, tol=0.05)
-            count_pairs_36 = self._count_pairs_with_y_spacing(positions_36, target_spacing=0.5, tol=0.05)
+            reward += min(len(positions_39), 2) * 1.0
 
-            reward += 3.0 * count_pairs_34
+            count_pairs_36 = self._count_pairs_with_y_spacing(positions_36, target_spacing=0.5, tol=0.05)
+            count_pairs_39 = self._count_pairs_with_y_spacing(positions_39, target_spacing=0.5, tol=0.05)
+
             reward += 3.0 * count_pairs_36
-            if len(positions_34) >= 2 and len(positions_36) >= 2:
+            reward += 3.0 * count_pairs_39
+
+            def force_score(forces, label):
+                if len(forces) < 2:
+                    return 0.0, False
+                avg_force = np.mean(forces)
+                if avg_force > 60.0:
+                    penalty = -5.0 * (avg_force - 60.0)
+                    print(f"[{label}] High avg force: {avg_force:.2f} → penalty {penalty:.2f}")
+                    return penalty, False
+                else:
+                    reward_force = max(0.5, 2.0 - (avg_force / 60.0))  # reward drops off as avg_force increases
+                    print(f"[{label}] Good avg force: {avg_force:.2f} → reward {reward_force:.2f}")
+                    return reward_force, True
+            
+            force_r_36, valid_36 = force_score(forces_36, "Beam 36")
+            force_r_39, valid_39 = force_score(forces_39, "Beam 39")
+
+            reward += force_r_36 + force_r_39
+            # print(len(positions_36), len(positions_39), valid_36, valid_39,'solid and good')
+            if (len(positions_36) >= 2 and len(positions_39) >= 2 and 
+                valid_36 and valid_39 and undesired_contacts == 0):
+
                 self.done = True
-                if (count_pairs_34 > 0) and (count_pairs_36 > 0) and (big_force_count == 0) and (undesired_contacts == 0):
-                    reward += 10.0
+                print("✔️ Placement successful!")
+                reward += 10.0
         return reward
     def _count_pairs_with_y_spacing(self, positions, target_spacing=0.5, tol=0.05):
-        """
-        Counts how many distinct pairs of positions differ in their y-coordinate
-        by approximately 'target_spacing' (within ± tol).
-        
-        :param positions: A list of 3D positions (each a 1D array [x, y, z]).
-        :param target_spacing: The desired difference in y-coordinates.
-        :param tol: The allowed tolerance above/below target_spacing.
-        :return: The number of pairs that meet this criterion.
-        """
         count = 0
         n = len(positions)
         for i in range(n):
@@ -285,7 +325,8 @@ class OA_env(gym.Env):
             c = self.mjc_env.data.contact[i]
             force = np.zeros(6, dtype=np.float64)
             mujoco.mj_contactForce(self.mjc_env.model, self.mjc_env.data, i, force)
-
+            if c.geom1 == 30 and c.geom2 == 31:
+                    self.mjc_env.welded = True
             contact_dict = {
                 "geom1": c.geom1,
                 "geom2": c.geom2,
@@ -296,4 +337,5 @@ class OA_env(gym.Env):
         return contacts_info
 
     def render(self, mode='human'):
-        self.mjc_env.render()
+        if(self.render_var):    
+            self.mjc_env.render()

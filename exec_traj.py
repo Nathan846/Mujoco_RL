@@ -57,7 +57,6 @@ class ReExecuteTrajectory:
             mujoco.mj_forward(self.model, self.data)
             self.viewer.render()
 
-            time.sleep(0.0002)
 
     def set_slab_state(self, slab_position, slab_orientation):
         """Set the slab state in the simulation."""
@@ -73,7 +72,7 @@ class ReExecuteTrajectory:
 
 if __name__ == "__main__":
     model_path = "universal_robots_ur5e/scene.xml"
-    trajectory_file = "traj_pruned.json"
+    trajectory_file = "place_1.json"
 
     executor = ReExecuteTrajectory(model_path, trajectory_file)
     try:

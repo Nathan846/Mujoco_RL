@@ -23,7 +23,7 @@ class MuJoCoEnv:
         self.max_angvel = 1.0
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
-        self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
+        # self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
         self.model.opt.timestep = self.dt
         self.logs = []
         self.final_contact = False
@@ -48,7 +48,8 @@ class MuJoCoEnv:
             self.update_slab_to_match_eef()
         mujoco.mj_forward(self.model, self.data)
         try:
-            self.viewer.render()
+            pass
+            # self.viewer.render()
         except:
             sys.exit(0)
 
@@ -102,4 +103,5 @@ class MuJoCoEnv:
         self.window.close()
 
     def close(self):
-        self.viewer.close()
+        pass
+        # self.viewer.close()

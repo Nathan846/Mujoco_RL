@@ -33,23 +33,25 @@ def test_trajectory_in_env(file_path, step_size=0.01):
 
     total_reward = 0.0
     step_count = 0
-
+    
     print("Starting discrete trajectory replay ...")
 
     for action in actions:
         obs, reward, done, info = env.step(action)
+        if(not reward):
+            continue
         total_reward += reward
         step_count += 1
-
+        
         print(f"Step {step_count}, Action: {action}, Reward: {reward:.3f}")
-
         if done:
             print("Environment returned done=True. Resetting...")
             obs = env.reset()
-
-    env.close()
     print(f"Replay finished. Total steps: {step_count}, Accumulated reward: {total_reward:.3f}")
 
+    while True:
+        continue
+
 if __name__ == "__main__":
-    file_path = "place_403_expanded.json"
+    file_path = "place_73_expanded.json"
     test_trajectory_in_env(file_path)
