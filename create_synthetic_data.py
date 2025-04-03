@@ -141,7 +141,7 @@ for file_path in json_files:
         "initial_values": init_vals,
         "data": final_logs
     }
-    output_folder = Path("processed_trajs")  # 👈 change folder name here
+    output_folder = Path("processed_trajs_all") 
     output_folder.mkdir(parents=True, exist_ok=True)
     output_path = output_folder / (file_path.stem + output_suffix)
     with open(output_path, "w") as f:

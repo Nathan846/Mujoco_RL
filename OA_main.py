@@ -158,7 +158,7 @@ def main():
             next_obs, reward, done, info = env.step(action)
             ep_reward += reward
             replay_buffer.push(obs, action, reward, next_obs, done)
-            obs = next_obs
+            obs = next_obs 
 
             total_steps += 1
             epsilon = max(epsilon_final, epsilon_start - total_steps / epsilon_decay)

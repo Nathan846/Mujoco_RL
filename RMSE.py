@@ -24,10 +24,10 @@ def calculate_rmse(traj1_joint_angles, traj2_joint_angles):
     rmse = np.sqrt(mse)
     return rmse
 
-first_file = 'trajectories/traj_rebalanced6.json'
+first_file = 'processed_trajs/place_1_updated.json'
 traj1_joint_angles = load_trajectory(first_file)
 
-folder_path = 'trajectories'
+folder_path = 'processed_trajs'
 files = [f for f in os.listdir(folder_path) if f.endswith('.json')]
 
 for file in files:
